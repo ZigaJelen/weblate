@@ -1,16 +1,19 @@
 {% extends "base.html" %}
 {% load i18n %}
 {% load crispy_forms_tags %}
+{% load permissions %}
 
 {% block breadcrumbs %}
 <li><a href="{{ project.get_absolute_url }}">{{ project }}</a></li>
-<li><a href="{% url 'show_dictionaries' project=project.slug %}">{% trans "dictionaries" %}</a></li>
+<li><a href="{% url 'show_dictionaries' project=project.slug %}">{% trans "glossaries" %}</a></li>
 <li><a href="{% url 'show_dictionary' project=project.slug lang=language.code %}">{{ language }}</a></li>
 {% endblock %}
 
 {% block content %}
 
-{% if perms.trans.add_dictionary %}
+{% can_change_dictionary user project as user_can_change_dictionary %}
+
+{% if user_can_change_dictionary %}
 
 <form method="POST">
 <div class="panel panel-primary">

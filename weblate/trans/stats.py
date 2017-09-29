@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2016 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -15,7 +15,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
 from __future__ import unicode_literals
@@ -24,53 +24,72 @@ from django.db.models import Sum
 from django.utils.encoding import force_text
 
 from weblate.lang.models import Language
-from weblate.trans.models import Translation
+from weblate.trans.models import Translation, Project
 from weblate.trans.util import translation_percent
 
 
-def get_per_language_stats(project):
-    """Calculates per language stats for project"""
+def get_per_language_stats(project, lang=None):
+    """Calculate per language stats for project"""
     result = []
 
-    # List languages
-    languages = Translation.objects.filter(
-        subproject__project=project
-    ).values_list(
-        'language',
-        flat=True
-    ).distinct()
-
-    # Calculates total strings in project
-    total = 0
-    total_words = 0
-    for component in project.subproject_set.all():
-        try:
-            translation = component.translation_set.all()[0]
-            total += translation.total
-            total_words += translation.total_words
-        except IndexError:
-            pass
-
-    # Translated strings in language
-    for language in Language.objects.filter(pk__in=languages):
-        data = Translation.objects.filter(
-            language=language,
-            subproject__project=project
-        ).aggregate(
-            Sum('translated'),
-            Sum('translated_words'),
+    if isinstance(project, Project):
+        language_objects = Language.objects.filter(
+            translation__subproject__project=project
+        )
+    else:
+        language_objects = Language.objects.filter(
+            translation__subproject=project
         )
 
-        translated = data['translated__sum']
-        translated_words = data['translated_words__sum']
+    if lang:
+        language_objects = language_objects.filter(pk=lang.pk)
+
+    # List languages
+    languages = {
+        language.pk: language for language in language_objects
+    }
+    if isinstance(project, Project):
+        base = Translation.objects.filter(
+            language__pk__in=languages.keys(),
+            subproject__project=project
+        )
+    else:
+        base = Translation.objects.filter(
+            language__pk__in=languages.keys(),
+            subproject=project
+        )
+    # Translated strings in language
+    data = base.values(
+        'language'
+    ).annotate(
+        Sum('translated'),
+        Sum('translated_words'),
+        Sum('total'),
+        Sum('total_words'),
+    ).order_by()
+    for item in data:
+        translated = item['translated__sum']
+        total = item['total__sum']
+        if total == 0:
+            percent = 0
+        else:
+            percent = int(100 * translated / total)
 
         # Insert sort
         pos = None
         for i, data in enumerate(result):
-            if translated >= data[1]:
+            if percent >= data[5]:
                 pos = i
                 break
-        value = (language, translated, total, translated_words, total_words)
+
+        value = (
+            languages[item['language']],
+            translated,
+            total,
+            item['translated_words__sum'],
+            item['total_words__sum'],
+            percent,
+        )
         if pos is not None:
             result.insert(pos, value)
         else:
@@ -80,7 +99,7 @@ def get_per_language_stats(project):
 
 
 def get_project_stats(project):
-    """Returns stats for project"""
+    """Return stats for project"""
     return [
         {
             'language': force_text(tup[0]),

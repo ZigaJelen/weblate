@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2016 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -15,16 +15,16 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
 from __future__ import unicode_literals
 
 from datetime import timedelta
+
 from django.utils import timezone
 
 from weblate.trans.management.commands import WeblateLangCommand
-from weblate import appsettings
 
 
 class Command(WeblateLangCommand):
@@ -37,17 +37,25 @@ class Command(WeblateLangCommand):
             action='store',
             type=int,
             dest='age',
-            default=appsettings.COMMIT_PENDING_HOURS,
+            default=0,
             help='Age of changes to commit in hours'
         )
 
     def handle(self, *args, **options):
 
-        age = timezone.now() - timedelta(hours=options['age'])
+        hours = options['age']
+
+        if hours:
+            age = timezone.now() - timedelta(hours=hours)
 
         for translation in self.get_translations(**options):
             if not translation.repo_needs_commit():
                 continue
+
+            if not hours:
+                age = timezone.now() - timedelta(
+                    hours=translation.subproject.commit_pending_age
+                )
 
             last_change = translation.last_change
             if last_change is None:
@@ -56,5 +64,5 @@ class Command(WeblateLangCommand):
                 continue
 
             if int(options['verbosity']) >= 1:
-                self.stdout.write('Committing %s' % translation)
+                self.stdout.write('Committing {0}'.format(translation))
             translation.commit_pending(None)

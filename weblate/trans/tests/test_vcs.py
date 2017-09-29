@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2016 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -15,7 +15,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
 from __future__ import unicode_literals
@@ -23,12 +23,11 @@ from __future__ import unicode_literals
 import tempfile
 import shutil
 import os.path
-from unittest import SkipTest
+from unittest import SkipTest, TestCase
 
-from django.test import TestCase
 from django.utils import timezone
 
-from weblate.trans.tests.test_models import RepoTestCase
+from weblate.trans.tests.utils import RepoTestMixin
 from weblate.trans.vcs import GitRepository, HgRepository, \
     RepositoryException, GitWithGerritRepository, GithubRepository, \
     SubversionRepository
@@ -82,7 +81,7 @@ class RepositoryTest(TestCase):
         self.assertTrue(GitTestRepository.is_supported())
 
 
-class VCSGitTest(RepoTestCase):
+class VCSGitTest(TestCase, RepoTestMixin):
     _tempdir = None
     _class = GitRepository
     _vcs = 'git'
@@ -93,6 +92,8 @@ class VCSGitTest(RepoTestCase):
         super(VCSGitTest, self).setUp()
         if not self._class.is_supported():
             raise SkipTest('Not supported')
+
+        self.clone_test_repos()
 
         self._tempdir = tempfile.mkdtemp()
         self.repo = self.clone_repo(self._tempdir)
@@ -236,39 +237,23 @@ class VCSGitTest(RepoTestCase):
 
     def check_valid_info(self, info):
         self.assertTrue('summary' in info)
-        self.assertTrue(info['summary'] != '')
+        self.assertNotEqual(info['summary'], '')
         self.assertTrue('author' in info)
-        self.assertTrue(info['author'] != '')
+        self.assertNotEqual(info['author'], '')
         self.assertTrue('authordate' in info)
-        self.assertTrue(info['authordate'] != '')
+        self.assertNotEqual(info['authordate'], '')
         self.assertTrue('commit' in info)
-        self.assertTrue(info['commit'] != '')
+        self.assertNotEqual(info['commit'], '')
         self.assertTrue('commitdate' in info)
-        self.assertTrue(info['commitdate'] != '')
+        self.assertNotEqual(info['commitdate'], '')
         self.assertTrue('revision' in info)
-        self.assertTrue(info['revision'] != '')
+        self.assertNotEqual(info['revision'], '')
         self.assertTrue('shortrevision' in info)
-        self.assertTrue(info['shortrevision'] != '')
+        self.assertNotEqual(info['shortrevision'], '')
 
     def test_revision_info(self):
         # Latest commit
         info = self.repo.get_revision_info(self.repo.last_revision)
-        self.check_valid_info(info)
-
-        # GPG signed commit
-        info = self.repo.get_revision_info(
-            'd6179e46c8255f1d5029f06c49468caf57b13b61'
-        )
-        self.check_valid_info(info)
-        self.assertEqual(
-            info['author'],
-            'Michal Čihař <michal@cihar.com>'
-        )
-
-        # Normal commit
-        info = self.repo.get_revision_info(
-            '2ae1998450a693f0a7962d69a1eec4cb2213d595'
-        )
         self.check_valid_info(info)
 
     def test_needs_merge(self):
@@ -283,7 +268,7 @@ class VCSGitTest(RepoTestCase):
         self.assertTrue(self._class.is_supported())
 
     def test_get_version(self):
-        self.assertTrue(self._class.get_version() != '')
+        self.assertNotEqual(self._class.get_version(), '')
 
     def test_set_committer(self):
         self.repo.set_committer('Foo Bar Žač', 'foo@example.net')

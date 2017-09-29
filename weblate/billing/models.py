@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2016 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -15,7 +15,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
 from __future__ import unicode_literals
@@ -176,6 +176,8 @@ class Billing(models.Model):
             )
         )
     in_limits.boolean = True
+    # Translators: Whether the package is inside actual (hard) limits
+    in_limits.short_description = _('In limits')
 
     def unit_count(self):
         return Unit.objects.filter(
@@ -212,6 +214,7 @@ class Billing(models.Model):
             )
         )
     in_display_limits.boolean = True
+    # Translators: Whether the package is inside displayed (soft) limits
     in_display_limits.short_description = _('In display limits')
 
 
@@ -219,6 +222,8 @@ class Billing(models.Model):
 class Invoice(models.Model):
     CURRENCY_EUR = 0
     CURRENCY_BTC = 1
+    CURRENCY_USD = 2
+    CURRENCY_CZK = 3
 
     billing = models.ForeignKey(Billing)
     start = models.DateField()
@@ -228,6 +233,8 @@ class Invoice(models.Model):
         choices=(
             (CURRENCY_EUR, 'EUR'),
             (CURRENCY_BTC, 'mBTC'),
+            (CURRENCY_USD, 'USD'),
+            (CURRENCY_CZK, 'CZK'),
         ),
         default=CURRENCY_EUR,
     )
@@ -238,7 +245,10 @@ class Invoice(models.Model):
         ordering = ['billing', '-start']
 
     def __str__(self):
-        return '{0} - {1}: {2}'.format(self.start, self.end, self.billing)
+        return '{0} - {1}: {2}'.format(
+            self.start, self.end,
+            self.billing if self.billing_id else None
+        )
 
     @property
     def filename(self):
@@ -253,7 +263,7 @@ class Invoice(models.Model):
         if self.end <= self.start:
             raise ValidationError('Start has be to before end!')
 
-        if self.billing is None:
+        if not self.billing_id:
             return
 
         overlapping = Invoice.objects.filter(

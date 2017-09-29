@@ -12,8 +12,14 @@
 
 
 {% if registration_open %}
-
+{% if legal %}
+<div class="alert alert-info">
+{% url 'legal:terms' as legal_url %}
+{% blocktrans %}Please read our <a href="{{ legal_url }}">Terms of Service</a> prior to registration.{% endblocktrans %}
+</div>
+{% else %}
 {% show_message "info" _("By registering you agree to use your name and email in version control system commits and provide your contribution under license defined by each translated project.") %}
+{% endif %}
 
 {% if form.errors %}
 {% show_message "error" _("Please fix errors in the registration form.") %}
@@ -31,6 +37,9 @@
 
 {% csrf_token %}
 {{ form|crispy }}
+{% if captcha_form %}
+{{ captcha_form|crispy }}
+{% endif %}
 </div>
 <div class="panel-footer">
 <input type="submit" value="{% trans 'Register' %}" class="btn btn-default" />
@@ -49,7 +58,7 @@
   <div class="panel-body">
 
 {% for name in registration_backends %}
-  <a class="btn btn-link" href="{% url 'social:begin' name %}">{% auth_name name %}</a>
+  <a class="btn btn-link link-post" href="{% url 'social:begin' name %}">{% auth_name name %}</a>
 {% endfor %}
 </div>
 </div>

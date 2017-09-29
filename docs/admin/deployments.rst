@@ -8,12 +8,14 @@ section brings overview of them.
 
 .. _docker:
 
-Weblate and Docker
-------------------
+Running Weblate in the Docker
+-----------------------------
 
 With dockerized weblate deployment you can get your personal weblate instance
 up an running in seconds. All of Weblate's dependencies are already included.
 PostgreSQL is configured as default database.
+
+.. _docker-deploy:
 
 Deployment
 ++++++++++
@@ -41,7 +43,7 @@ this.
           - WEBLATE_EMAIL_HOST=smtp.example.com
           - WEBLATE_EMAIL_HOST_USER=user
           - WEBLATE_EMAIL_HOST_PASSWORD=pass
-          - WEBLATE_ALLOWED_HOSTS=your hosts
+          - WEBLATE_ALLOWED_HOSTS=weblate.example.com
           - WEBLATE_ADMIN_PASSWORD=password for admin user
 
 .. note::
@@ -61,9 +63,68 @@ this.
 
     docker-compose up
 
-Enjoy your Weblate deployment, it's accessible on port 80 of the web container.
+Enjoy your Weblate deployment, it's accessible on port 80 of the ``weblate`` container.
+
+.. versionchanged:: 2.15-2
+
+    The setup has changed recently, prior there was separate web server
+    container, since 2.15-2 the web server is embedded in weblate container.
 
 .. seealso:: :ref:`invoke-manage`
+
+.. _docker-ssl:
+
+Docker container with https support
++++++++++++++++++++++++++++++++++++
+
+Please see :ref:`docker-deploy` for generic deployment instructions. To add
+HTTPS reverse proxy additional Docker container is required, we will use
+`https-portal <https://hub.docker.com/r/steveltn/https-portal/>`_. This is 
+used in the :file:`docker-compose-https.yml` file. Then you just need to create
+a :file:`docker-compose-https.override.yml` file with your settings:
+
+.. code-block:: yaml
+
+    version: '2'
+    services:
+      weblate:
+        environment:
+          - WEBLATE_EMAIL_HOST=smtp.example.com
+          - WEBLATE_EMAIL_HOST_USER=user
+          - WEBLATE_EMAIL_HOST_PASSWORD=pass
+          - WEBLATE_ALLOWED_HOSTS=weblate.example.com
+          - WEBLATE_ADMIN_PASSWORD=password for admin user
+      https-portal:
+        environment:
+          DOMAINS: 'weblate.example.com -> http://weblate'
+
+Whenever invoking :program:`docker-compose` you need to pass both files to it
+then:
+
+.. code-block:: console
+
+    docker-compose -f docker-compose-https.yml -f docker-compose-https.override.yml build
+    docker-compose -f docker-compose-https.yml -f docker-compose-https.override.yml up
+
+Upgrading Docker container
+++++++++++++++++++++++++++
+
+Usually it is good idea to update weblate container only and keep PostgreSQL
+one at version you have as upgrading PostgreSQL is quite painful and in most
+cases it does not bring much benefits.
+
+You can do this by sticking with existing docker-compose and just pulling
+latest images and restarting:
+
+.. code-block:: sh
+
+    docker-compose down
+    docker-compose pull
+    docker-compose build --pull
+    docker-compose up
+
+The Weblate database should be automatically migrated on first start and there
+should be no need for additional manual actions.
 
 Maintenance tasks
 +++++++++++++++++
@@ -88,7 +149,7 @@ Generic settings
 
 .. envvar:: WEBLATE_DEBUG
 
-    Configures Django debug mode, see :ref:`production-debug`.
+    Configures Django debug mode using :setting:`DEBUG`.
 
     **Example:**
 
@@ -97,6 +158,10 @@ Generic settings
         environment:
           - WEBLATE_DEBUG=1
 
+    .. seealso::
+
+            :ref:`production-debug`.
+
 .. envvar:: WEBLATE_LOGLEVEL
 
     Configures verbosity of logging.
@@ -104,12 +169,12 @@ Generic settings
 
 .. envvar:: WEBLATE_SITE_TITLE
 
-    Configures site title, see :ref:`production-site`.
+    Configures site title shown on headings of all pages.
 
 .. envvar:: WEBLATE_ADMIN_NAME
 .. envvar:: WEBLATE_ADMIN_EMAIL
 
-    Configures site admins name and email, see :ref:`production-admins`.
+    Configures site admins name and email.
 
     **Example:**
 
@@ -118,6 +183,10 @@ Generic settings
         environment:
           - WEBLATE_ADMIN_NAME=Weblate Admin
           - WEBLATE_ADMIN_EMAIL=noreply@example.com
+
+    .. seealso::
+
+            :ref:`production-admins`
 
 .. envvar:: WEBLATE_ADMIN_PASSWORD
 
@@ -133,11 +202,16 @@ Generic settings
 .. envvar:: WEBLATE_SERVER_EMAIL
 .. envvar:: WEBLATE_DEFAULT_FROM_EMAIL
 
-    Configures address for outgoing mails, see :ref:`production-email`.
+    Configures address for outgoing mails.
+
+    .. seealso::
+
+        :ref:`production-email`
 
 .. envvar:: WEBLATE_ALLOWED_HOSTS
 
-    Configures allowed HTTP hostnames, see :ref:`production-hosts`
+    Configures allowed HTTP hostnames using :setting:`ALLOWED_HOSTS` and sets
+    site name to first one.
 
     **Example:**
 
@@ -146,18 +220,27 @@ Generic settings
         environment:
           - WEBLATE_ALLOWED_HOSTS=weblate.example.com,example.com
 
+    .. seealso::
+
+        :ref:`production-hosts`,
+        :ref:`production-site`
+
 .. envvar:: WEBLATE_SECRET_KEY
 
-    Configures secret for cookies signing, see :ref:`production-secret`.
+    Configures secret used for Django for cookies signing.
 
     .. deprecated:: 2.9
 
         The secret is now generated automatically on first startup, there is no
         need to set it manually.
 
+    .. seealso::
+
+        :ref:`production-secret`
+
 .. envvar:: WEBLATE_REGISTRATION_OPEN
 
-    Configures whether registrations are open, see :std:setting:`REGISTRATION_OPEN`.
+    Configures whether registrations are open by toggling :std:setting:`REGISTRATION_OPEN`.
 
     **Example:**
 
@@ -172,7 +255,7 @@ Generic settings
 
 .. envvar:: WEBLATE_OFFLOAD_INDEXING
 
-    Configures offloaded indexing, see :ref:`production-indexing`.
+    Configures offloaded indexing.
 
     **Example:**
 
@@ -181,9 +264,20 @@ Generic settings
         environment:
           - WEBLATE_OFFLOAD_INDEXING=1
 
+    .. seealso::
+
+        :ref:`production-indexing`
+
 .. envvar:: WEBLATE_ENABLE_HTTPS
 
-    Configures when use https in email and API links, see :ref:`production-site`.
+    Makes Weblate assume it is operated behind HTTPS reverse proxy, it make
+    Weblate https in email and API links or set secure flags on cookies.
+
+    .. note::
+
+        This does not make the Weblate container accept https connection, you
+        need to use standalone HTTPs reverse proxy, see :ref:`docker-ssl` for
+        example.
 
     **Example:**
 
@@ -191,6 +285,10 @@ Generic settings
 
         environment:
           - WEBLATE_ENABLE_HTTPS=1
+
+    .. seealso::
+
+        :ref:`production-site`
 
 .. envvar:: WEBLATE_REQUIRE_LOGIN
 
@@ -205,7 +303,17 @@ Generic settings
 
 .. envvar:: WEBLATE_GOOGLE_ANALYTICS_ID
 
-    Configures ID for Google Analytics, see :setting:`GOOGLE_ANALYTICS_ID`.
+    Configures ID for Google Analytics by changing :setting:`GOOGLE_ANALYTICS_ID`.
+
+.. envvar:: WEBLATE_GITHUB_USERNAME
+
+    Configures github username for GitHub pull requests by changing
+    :setting:`GITHUB_USERNAME`.
+
+    .. seealso::
+
+       :ref:`github-push`,
+       :ref:`hub-setup`
 
 
 Machine translation settings
@@ -215,14 +323,38 @@ Machine translation settings
 
     Enables Google machine translation and sets :setting:`MT_GOOGLE_KEY`
 
+.. envvar:: WEBLATE_MT_MICROSOFT_COGNITIVE_KEY
+
+    Enables Microsoft machine translation and sets :setting:`MT_MICROSOFT_COGNITIVE_KEY`
 
 Authentication settings
 ~~~~~~~~~~~~~~~~~~~~~~~
 
+.. envvar:: WEBLATE_AUTH_LDAP_SERVER_URI
+.. envvar:: WEBLATE_AUTH_LDAP_USER_DN_TEMPLATE
+.. envvar:: WEBLATE_AUTH_LDAP_USER_ATTR_MAP
+
+    LDAP authentication configuration.
+
+    **Example:**
+
+    .. code-block:: yaml
+
+        environment:
+          - WEBLATE_AUTH_LDAP_SERVER_URI=ldap://ldap.example.org
+          - WEBLATE_AUTH_LDAP_USER_DN_TEMPLATE=uid=%(user)s,ou=People,dc=example,dc=net
+          # map weblate 'first_name' to ldap 'name' and weblate 'email' attribute to 'mail' ldap attribute.
+          # another example that can be used with OpenLDAP: 'first_name:cn,email:mail'
+          - WEBLATE_AUTH_LDAP_USER_ATTR_MAP=first_name:name,email:mail
+
+    .. seealso::
+
+        :ref:`ldap-auth`
+
 .. envvar:: WEBLATE_SOCIAL_AUTH_GITHUB_KEY
 .. envvar:: WEBLATE_SOCIAL_AUTH_GITHUB_SECRET
 
-    Enables :ref:`google_auth`.
+    Enables :ref:`github_auth`.
 
 .. envvar:: WEBLATE_SOCIAL_AUTH_BITBUCKET_KEY
 .. envvar:: WEBLATE_SOCIAL_AUTH_BITBUCKET_SECRET
@@ -239,8 +371,49 @@ Authentication settings
 
     Enables :ref:`google_auth`.
 
-PostgreSQL databse setup
-~~~~~~~~~~~~~~~~~~~~~~~~
+.. envvar:: WEBLATE_SOCIAL_AUTH_GITLAB_KEY
+.. envvar:: WEBLATE_SOCIAL_AUTH_GITLAB_SECRET
+.. envvar:: WEBLATE_SOCIAL_AUTH_GITLAB_API_URL
+
+    Enables :ref:`gitlab_auth`.
+
+Processing hooks
+~~~~~~~~~~~~~~~~
+
+All these processing hooks should get comma separaated list of available
+scripts, for example:
+
+.. code-block:: sh
+
+    WEBLATE_POST_UPDATE_SCRIPTS=/usr/local/share/weblate/examples/hook-cleanup-android
+
+.. seealso::
+
+    :ref:`processing`
+
+.. envvar:: WEBLATE_POST_UPDATE_SCRIPTS
+
+    Sets :setting:`POST_UPDATE_SCRIPTS`.
+
+.. envvar:: WEBLATE_PRE_COMMIT_SCRIPTS
+
+    Sets :setting:`PRE_COMMIT_SCRIPTS`.
+
+.. envvar:: WEBLATE_POST_COMMIT_SCRIPTS
+
+    Sets :setting:`POST_COMMIT_SCRIPTS`.
+
+.. envvar:: WEBLATE_POST_PUSH_SCRIPTS
+
+    Sets :setting:`POST_PUSH_SCRIPTS`.
+
+.. envvar:: WEBLATE_POST_ADD_SCRIPTS
+
+    Sets :setting:`POST_ADD_SCRIPTS`.
+
+
+PostgreSQL database setup
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The database is created by :file:`docker-compose.yml`, so this settings affects
 both Weblate and PostgreSQL containers.
@@ -257,7 +430,15 @@ both Weblate and PostgreSQL containers.
 
 .. envvar:: POSTGRES_DATABASE
 
-    PostgreSQL databse name.
+    PostgreSQL database name.
+
+.. envvar:: POSTGRES_HOST
+
+    PostgreSQL server hostname or IP adress. Defaults to `database`.
+
+.. envvar:: POSTGRES_PORT
+
+    PostgreSQL server port. Default to empty (use default value).
 
 Email server setup
 ~~~~~~~~~~~~~~~~~~
@@ -270,15 +451,36 @@ To make outgoing email work, you need to provide mail server.
 
     Mail server, the server has to listen on port 587 and understand TLS.
 
-.. envvar:: WEBLATE_EMAIL_USER
+.. envvar:: WEBLATE_EMAIL_PORT
+
+    Mail server port, use if your cloud provider or ISP blocks outgoing
+    connections on port 587.
+
+.. envvar:: WEBLATE_EMAIL_HOST_USER
 
     Email authentication user, do NOT use quotes here.
 
-.. envvar:: WEBLATE_EMAIL_PASSWORD
+.. envvar:: WEBLATE_EMAIL_HOST_PASSWORD
 
     Email authentication password, do NOT use quotes here.
 
+Hub setup
++++++++++
 
+In order to use the Github pull requests feature, you must initialize hub configuration by entering the weblate container and executing an arbitrary hub command. For example:
+
+.. code-block:: sh
+
+    docker-compose exec weblate bash
+    cd
+    HOME=/app/data/home hub clone octocat/Spoon-Knife
+
+The username passed for credentials must be the same than :setting:`GITHUB_USERNAME`.
+
+.. seealso::
+
+    :ref:`github-push`,
+    :ref:`hub-setup`
 
 Select your machine - local or cloud providers
 ++++++++++++++++++++++++++++++++++++++++++++++
@@ -289,8 +491,8 @@ Digitalocean and many more providers.
 
 .. _openshift:
 
-Weblate on OpenShift
---------------------
+Running Weblate on OpenShift
+----------------------------
 
 This repository contains a configuration for the OpenShift platform as a
 service product, which facilitates easy installation of Weblate on OpenShift
@@ -328,18 +530,21 @@ with the following command:
 
 .. code-block:: sh
 
+    # Install Git HEAD
     rhc -aweblate app create -t python-2.7 --from-code https://github.com/WeblateOrg/weblate.git --no-git
+
+    # Install Weblate 2.10
+    rhc -aweblate app create -t python-2.7 --from-code https://github.com/WeblateOrg/weblate.git#weblate-2.10 --no-git
 
 The ``-a`` option defines the name of your weblate installation, ``weblate`` in
 this instance. You are free to specify a different name.
 
-Optionally you can specify tag identifier right of the ``#`` sign to identify
-the version of Weblate to install (for example specify
-``https://github.com/WeblateOrg/weblate.git#weblate-2.0`` to install Weblate 2.0).
-For a list of available versions see here:
-https://github.com/WeblateOrg/weblate/tags. Please note that only version 2.0 and
-newer can be installed on OpenShift, as older versions don't include the
-necessary configuration files. The ``--no-git`` option skips the creation of a
+The above example installs latest development version, you can optionally
+specify tag identifier right of the ``#`` sign to identify the version of
+Weblate to install. For a list of available versions see here:
+https://github.com/WeblateOrg/weblate/tags.
+
+The ``--no-git`` option skips the creation of a
 local git repository.
 
 You can also specify which database you want to use:
@@ -357,9 +562,9 @@ Default Configuration
 
 After installation on OpenShift Weblate is ready to use and preconfigured as follows:
 
-* SQLite embedded database (DATABASES)
+* SQLite embedded database (:setting:`DATABASES`)
 * Random admin password
-* Random Django secret key (SECRET_KEY)
+* Random Django secret key (:setting:`SECRET_KEY`)
 * Indexing offloading if the cron cartridge is installed (:setting:`OFFLOAD_INDEXING`)
 * Committing of pending changes if the cron cartridge is installed (:djadmin:`commit_pending`)
 * Weblate machine translations for suggestions bases on previous translations (:setting:`MACHINE_TRANSLATION_SERVICES`)
@@ -418,7 +623,7 @@ under :ref:`config` using ``rhc env set`` by prepending the settings name with
 so it is parsed as Python string, after replacing environment variables in it
 (eg. ``$PATH``). To put literal ``$`` you need to escape it as ``$$``.
 
-For example override the ``ADMINS`` setting like this:
+For example override the :setting:`ADMINS` setting like this:
 
 .. code-block:: sh
 
@@ -513,8 +718,8 @@ documentation.
 
 .. _appliance:
 
-SUSE Studio appliance
----------------------
+Weblate as a SUSE Studio appliance
+----------------------------------
 
 Weblate appliance provides preconfigured Weblate running with PostgreSQL
 database as backend and Apache as web server. It is provided in many formats

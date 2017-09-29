@@ -86,7 +86,7 @@ Trailing stop
 Source and translated do not both end with a full stop. Full stop is also
 checked in various language variants (Chinese, Japanese, Devanagari or Urdu).
 
-Whet the original string is a sentence, the translated one should be sentence
+When the original string is a sentence, the translated one should be a sentence
 as well to be consistent within the translated content.
 
 .. _check-end-colon:
@@ -148,6 +148,15 @@ when the original string was using that as well.
    
    `Ellipsis on wikipedia <https://en.wikipedia.org/wiki/Ellipsis>`_
 
+
+.. _check-end-semicolon:
+
+Trailing semicolon
+~~~~~~~~~~~~~~~~~~
+
+Source and translation do not both end with a semicolon. This can be useful to
+keep formatting of entries such as desktop files.
+
 .. _check-max-length:
 
 Maximum Length
@@ -168,6 +177,7 @@ Unlike the other checks, the flag should be set as a ``key:value`` pair like
 .. _check-python-brace-format:
 .. _check-php-format:
 .. _check-c-format:
+.. _check-perl-format:
 .. _check-javascript-format:
 .. _check-angularjs-format:
 
@@ -180,6 +190,7 @@ Format string does not match source. Weblate supports following formats:
 * Python brace format
 * PHP format
 * C format
+* Perl format
 * Javascript format
 * AngularJS interpolation string
 
@@ -188,10 +199,11 @@ should really keep the format string matching the original one.
 
 .. seealso::
 
-    `Python string formatting <https://docs.python.org/2.7/library/stdtypes.html#string-formatting>`_,
-    `Python brace format <https://docs.python.org/3.3/library/string.html#string-formatting>`_,
+    :ref:`Python string formatting <python2:string-formatting>`,
+    :ref:`Python brace format <python:formatstrings>`,
     `PHP format strings <https://php.net/manual/en/function.sprintf.php>`_,
     `C printf format <https://en.wikipedia.org/wiki/Printf_format_string>`_,
+    `Perl sprintf <https://perldoc.perl.org/functions/sprintf.html>`_,
     `AngularJS: API: $interpolate <https://docs.angularjs.org/api/ng/service/$interpolate>`_
 
 .. _check-plurals:
@@ -224,6 +236,14 @@ string on :guilabel:`All locations` tab.
 
 Weblate checks translations of the same string across all translation within a
 project to help you keep consistent translations.
+
+.. _check-translated:
+
+Has been translated
+~~~~~~~~~~~~~~~~~~~
+
+This string has been translated in the past. This can happen when the
+translations have been reverted in VCS or otherwise lost.
 
 .. _check-escaped-newline:
 
@@ -313,7 +333,7 @@ Ellipsis
 
 The string uses three dots (``...``) instead of an ellipsis character (``…``).
 
-Using Unicode character is in most cases better approach and looks better when
+Using Unicode character is in most cases the better approach and looks better when
 rendered.
 
 .. seealso::
@@ -326,9 +346,9 @@ Multiple failing checks
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 More translations of this string have some failed quality checks. This is
-usually indication that something could be done about improving the source
+usually an indication that something could be done about improving the source
 string.
 
-This check can be quite often caused by missing full stop at the end of
-sentence or similar minor issues which translators tend to fix in
+This check can quite often be caused by a missing full stop at the end of
+a sentence or similar minor issues which translators tend to fix in
 translations, while it would be better to fix it in a source string.

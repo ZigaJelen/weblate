@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2016 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -15,17 +15,17 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
 from __future__ import unicode_literals
-from django.contrib import admin
+
 from django.utils.translation import ugettext_lazy as _
 
-from weblate.billing.models import Plan, Billing, Invoice
+from weblate.wladmin.models import WeblateModelAdmin
 
 
-class PlanAdmin(admin.ModelAdmin):
+class PlanAdmin(WeblateModelAdmin):
     list_display = (
         'name', 'price', 'limit_strings', 'limit_languages',
         'limit_repositories', 'limit_projects',
@@ -34,7 +34,7 @@ class PlanAdmin(admin.ModelAdmin):
     )
 
 
-class BillingAdmin(admin.ModelAdmin):
+class BillingAdmin(WeblateModelAdmin):
     list_display = (
         'user', 'plan', 'state',
         'list_projects',
@@ -52,7 +52,7 @@ class BillingAdmin(admin.ModelAdmin):
     list_projects.short_description = _('Projects')
 
 
-class InvoiceAdmin(admin.ModelAdmin):
+class InvoiceAdmin(WeblateModelAdmin):
     list_display = (
         'billing', 'start', 'end', 'payment', 'currency', 'ref'
     )
@@ -62,8 +62,3 @@ class InvoiceAdmin(admin.ModelAdmin):
         'ref', 'note',
     )
     date_hierarchy = 'end'
-
-
-admin.site.register(Plan, PlanAdmin)
-admin.site.register(Billing, BillingAdmin)
-admin.site.register(Invoice, InvoiceAdmin)

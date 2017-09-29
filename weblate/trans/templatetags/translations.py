@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2016 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -15,7 +15,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
 from __future__ import unicode_literals
@@ -32,14 +32,13 @@ from django.utils.encoding import force_text
 from django.utils.translation import ugettext as _, ungettext, ugettext_lazy
 from django.utils import timezone
 from django import template
-import django
 
 import weblate
 from weblate.trans.simplediff import html_diff
 from weblate.trans.util import split_plural
 from weblate.lang.models import Language
 from weblate.trans.models import (
-    Project, SubProject, Dictionary, Advertisement, WhiteboardMessage
+    Project, SubProject, Dictionary, Advertisement, WhiteboardMessage, Unit,
 )
 from weblate.trans.checks import CHECKS, highlight_string
 
@@ -69,12 +68,23 @@ NAME_MAPPING = {
 }
 
 FLAG_TEMPLATE = '<i title="{0}" class="fa fa-{1}"></i>'
+BADGE_TEMPLATE = '<span class="badge pull-right flip {1}">{0}</span>'
+
+PERM_TEMPLATE = '''
+<td>
+<input type="checkbox"
+    class="set-group"
+    data-placement="bottom"
+    data-username="{0}"
+    data-group="{1}"
+    data-name="{2}"
+    {3} />
+</td>
+'''
 
 
 def fmt_whitespace(value):
-    '''
-    Formats whitespace so that it is more visible.
-    '''
+    """Format whitespace so that it is more visible."""
     # Highlight exta whitespace
     value = WHITESPACE_RE.sub(
         '<span class="hlspace">\\1</span>',
@@ -97,7 +107,7 @@ def fmt_diff(value, diff, idx):
 
 
 def fmt_highlights(raw_value, value, unit):
-    """Formats check highlights"""
+    """Format check highlights"""
     if unit is None:
         return value
     highlights = highlight_string(raw_value, unit)
@@ -113,34 +123,39 @@ def fmt_highlights(raw_value, value, unit):
     return value
 
 
-def fmt_search(value, search_match):
-    """Formats search match"""
+def fmt_search(value, search_match, match):
+    """Format search match"""
     if search_match:
-        # Since the search ignored case, we need to highlight any
-        # combination of upper and lower case we find. This is too
-        # advanced for str.replace().
-        caseless = re.compile(re.escape(search_match), re.IGNORECASE)
-        for variation in re.findall(caseless, value):
-            value = re.sub(
-                caseless,
-                '<span class="hlmatch">{0}</span>'.format(variation),
+        search_match = escape(search_match)
+        if match == 'search':
+            # Since the search ignored case, we need to highlight any
+            # combination of upper and lower case we find.
+            return re.sub(
+                r'(' + re.escape(search_match) + ')',
+                r'<span class="hlmatch">\1</span>',
                 value,
+                flags=re.IGNORECASE
+            )
+        elif match in ('replacement', 'replaced'):
+            return value.replace(
+                search_match,
+                '<span class="{0}">{1}</span>'.format(
+                    match, search_match
+                )
             )
     return value
 
 
 @register.inclusion_tag('format-translation.html')
 def format_translation(value, language, diff=None, search_match=None,
-                       simple=False, num_plurals=2, unit=None):
-    """
-    Nicely formats translation text possibly handling plurals or diff.
-    """
+                       simple=False, num_plurals=2, unit=None, match='search'):
+    """Nicely formats translation text possibly handling plurals or diff."""
     # Split plurals to separate strings
     plurals = split_plural(value)
 
     # Show plurals?
     if int(num_plurals) <= 1:
-        plurals = plurals[:1]
+        plurals = plurals[-1:]
 
     # Newline concatenator
     newline = SPACE_NL.format(_('New line'))
@@ -166,7 +181,7 @@ def format_translation(value, language, diff=None, search_match=None,
         value = fmt_highlights(raw_value, value, unit)
 
         # Format search term
-        value = fmt_search(value, search_match)
+        value = fmt_search(value, search_match, match)
 
         # Normalize newlines
         value = NEWLINES_RE.sub('\n', value)
@@ -196,9 +211,7 @@ def format_translation(value, language, diff=None, search_match=None,
 
 @register.simple_tag
 def check_severity(check):
-    '''
-    Returns check severity, or its id if check is not known.
-    '''
+    """Return check severity, or its id if check is not known."""
     try:
         return escape(CHECKS[check].severity)
     except KeyError:
@@ -207,9 +220,7 @@ def check_severity(check):
 
 @register.simple_tag
 def check_name(check):
-    '''
-    Returns check name, or its id if check is not known.
-    '''
+    """Return check name, or its id if check is not known."""
     try:
         return escape(CHECKS[check].name)
     except KeyError:
@@ -218,9 +229,7 @@ def check_name(check):
 
 @register.simple_tag
 def check_description(check):
-    '''
-    Returns check description, or its id if check is not known.
-    '''
+    """Return check description, or its id if check is not known."""
     try:
         return escape(CHECKS[check].description)
     except KeyError:
@@ -229,17 +238,13 @@ def check_description(check):
 
 @register.simple_tag
 def project_name(prj):
-    '''
-    Gets project name based on slug.
-    '''
+    """Get project name based on slug."""
     return escape(force_text(Project.objects.get(slug=prj)))
 
 
 @register.simple_tag
 def subproject_name(prj, subprj):
-    '''
-    Gets subproject name based on slug.
-    '''
+    """Get subproject name based on slug."""
     return escape(
         force_text(SubProject.objects.get(project__slug=prj, slug=subprj))
     )
@@ -247,45 +252,32 @@ def subproject_name(prj, subprj):
 
 @register.simple_tag
 def language_name(code):
-    '''
-    Gets language name based on its code.
-    '''
+    """Get language name based on its code."""
     return escape(force_text(Language.objects.get(code=code)))
 
 
 @register.simple_tag
 def dictionary_count(lang, project):
-    '''
-    Returns number of words in dictionary.
-    '''
+    """Return number of words in dictionary."""
     return Dictionary.objects.filter(project=project, language=lang).count()
 
 
 @register.simple_tag
 def documentation(page, anchor=''):
-    '''
-    Returns link to Weblate documentation.
-    '''
+    """Return link to Weblate documentation."""
     return weblate.get_doc_url(page, anchor)
 
 
 @register.assignment_tag
 def doc_url(page, anchor=''):
-    '''
-    Returns link to Weblate documentation.
-    '''
+    """Return link to Weblate documentation."""
     return weblate.get_doc_url(page, anchor)
 
 
 @register.simple_tag
 def admin_boolean_icon(val):
-    '''
-    Admin icon wrapper.
-    '''
-    if django.VERSION > (1, 9):
-        ext = 'svg'
-    else:
-        ext = 'gif'
+    """Admin icon wrapper."""
+    ext = 'svg'
     icon_url = static(
         'admin/img/icon-{0}.{1}'.format(TYPE_MAPPING[val], ext)
     )
@@ -315,9 +307,7 @@ def show_checks(project, checks, user):
 
 
 def naturaltime_past(value, now):
-    """
-    Handling of past dates for naturaltime.
-    """
+    """Handling of past dates for naturaltime."""
 
     # this function is huge
     # pylint: disable=R0911,R0912
@@ -376,9 +366,7 @@ def naturaltime_past(value, now):
 
 
 def naturaltime_future(value, now):
-    """
-    Handling of future dates for naturaltime.
-    """
+    """Handling of future dates for naturaltime."""
 
     # this function is huge
     # pylint: disable=R0911,R0912
@@ -469,9 +457,7 @@ def naturaltime(value, now=None):
 
 @register.simple_tag
 def get_advertisement_text_mail():
-    '''
-    Returns advertisement text.
-    '''
+    """Return advertisement text."""
     advertisement = Advertisement.objects.get_advertisement(
         Advertisement.PLACEMENT_MAIL_TEXT
     )
@@ -482,9 +468,7 @@ def get_advertisement_text_mail():
 
 @register.simple_tag
 def get_advertisement_html_mail():
-    '''
-    Returns advertisement text.
-    '''
+    """Return advertisement text."""
     advertisement = Advertisement.objects.get_advertisement(
         Advertisement.PLACEMENT_MAIL_HTML
     )
@@ -526,10 +510,35 @@ def words_progress(translation):
 
 
 @register.simple_tag
+def get_state_badge(unit):
+    """Return state badge."""
+    flag = None
+
+    if unit.fuzzy:
+        flag = (
+            _('Needs review'),
+            'text-danger'
+        )
+    elif not unit.translated:
+        flag = (
+            _('Not translated'),
+            'text-danger'
+        )
+    elif unit.translated:
+        flag = (
+            _('Translated'),
+            'text-success'
+        )
+
+    if flag is None:
+        return ''
+
+    return mark_safe(BADGE_TEMPLATE.format(*flag))
+
+
+@register.simple_tag
 def get_state_flags(unit):
-    """
-    Returns state flags.
-    """
+    """Return state flags."""
     flags = []
 
     if unit.fuzzy:
@@ -565,10 +574,8 @@ def get_state_flags(unit):
 
 
 @register.simple_tag
-def get_location_links(unit):
-    """
-    Generates links to source files where translation was used.
-    """
+def get_location_links(profile, unit):
+    """Generate links to source files where translation was used."""
     ret = []
 
     # Do we have any locations?
@@ -590,7 +597,15 @@ def get_location_links(unit):
         else:
             filename = location_parts[0]
             line = 0
-        link = unit.translation.subproject.get_repoweb_link(filename, line)
+        if profile.editor_link:
+            link = profile.editor_link % {
+                'file': filename,
+                'line': line,
+                'branch': unit.translation.subproject.branch
+            }
+        else:
+            link = unit.translation.subproject.get_repoweb_link(filename, line)
+        location = location.replace('/', '/\u200B')
         if link is None:
             ret.append(escape(location))
         else:
@@ -602,7 +617,7 @@ def get_location_links(unit):
 
 @register.simple_tag
 def whiteboard_messages(project=None, subproject=None, language=None):
-    """Displays whiteboard messages for given context"""
+    """Display whiteboard messages for given context"""
     ret = []
 
     whiteboards = WhiteboardMessage.objects.context_filter(
@@ -628,4 +643,40 @@ def whiteboard_messages(project=None, subproject=None, language=None):
 @register.simple_tag(takes_context=True)
 def active_tab(context, slug):
     active = "active" if slug == context['active_tab_slug'] else ""
-    return mark_safe('class="tab-pane %s" id="%s"' % (active, slug))
+    return mark_safe('class="tab-pane {0}" id="{1}"'.format(active, slug))
+
+
+@register.simple_tag(takes_context=True)
+def active_link(context, slug):
+    if slug == context['active_tab_slug']:
+        return mark_safe('class="active"')
+    return ''
+
+
+@register.assignment_tag
+def matching_cotentsum(item):
+    """Find matching objects to suggestion, comment or check"""
+    return Unit.objects.prefetch().filter(
+        translation__subproject__project=item.project,
+        translation__language=item.language,
+        content_hash=item.content_hash,
+    )
+
+
+@register.simple_tag
+def user_permissions(user, groups):
+    """Render checksboxes for user permissions."""
+    result = []
+    for group in groups:
+        checked = ''
+        if user.groups.filter(pk=group[0]).exists():
+            checked = ' checked="checked"'
+        result.append(
+            PERM_TEMPLATE.format(
+                escape(user.username),
+                group[0],
+                escape(group[1]),
+                checked
+            )
+        )
+    return mark_safe(''.join(result))

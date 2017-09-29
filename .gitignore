@@ -1,3 +1,4 @@
+*.pyproj
 *.pyc
 *.sw[po]
 /.coverage
@@ -8,6 +9,8 @@
 weblate-*.tar.*
 /translate
 /social
+/social_core
+/social_django
 /*.db
 /weblate/settings.py
 /weblate/test-repos/
@@ -22,3 +25,4 @@ weblate-*.tar.*
 /data/
 /data-test/
 /dist/
+/.vs

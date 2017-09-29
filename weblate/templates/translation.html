@@ -9,7 +9,7 @@
 <li><a href="{{ object.subproject.get_absolute_url }}">{{ object.subproject.name }}</a></li>
 <li><a href="{{ object.get_absolute_url }}">{{ object.language }}</a></li>
 <a class="pull-right flip" href="{{ object.get_widgets_url }}">
-<img src="{% url 'widget-image-lang' project=object.subproject.project.slug widget='svg' color='badge' lang=object.language.code extension='svg' %}?native=1" />
+<img src="{% url 'widget-image' project=object.subproject.project.slug subproject=object.subproject.slug widget='svg' color='badge' lang=object.language.code extension='svg' %}?native=1" />
 </a>
 {% endblock %}
 
@@ -19,6 +19,8 @@
 
 {% can_see_repository_status user object.subproject.project as user_can_see_repository_status %}
 {% can_commit_translation user object.subproject.project as user_can_commit_translation %}
+{% can_lock_translation user object.subproject.project as user_can_lock_translation %}
+{% can_overwrite_translation user object.subproject.project as user_can_overwrite_translation %}
 {% can_upload_translation user object as user_can_upload_translation %}
 {% can_upload_screenshot user project as user_can_upload_screenshot %}
 
@@ -27,10 +29,18 @@
 
 <ul class="nav nav-pills">
   <li class="active"><a href="#overview" data-toggle="tab">{% trans "Overview" %}</a></li>
+  <li><a href="#information" data-toggle="tab">{% trans "Information" %}</a></li>
   <li><a href="#search" data-toggle="tab">{% trans "Search" %}</a></li>
-  <li><a href="#history" data-toggle="tab">{% trans "History" %}</a></li>
-  <li><a href="#activity" data-toggle="tab" data-load="activity" data-yearly="{% url 'yearly_activity' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}" data-monthly="{% url 'monthly_activity' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}">{% trans "Activity" %}</a></li>
-  <li><a href="#stats" data-toggle="tab">{% trans "Statistics" %}</a></li>
+  <li class="dropdown">
+    <a class="dropdown-toggle" data-toggle="dropdown" href="#">
+      {% trans "Insights" %} <span class="caret"></span>
+    </a>
+    <ul class="dropdown-menu">
+      <li><a href="#history" data-toggle="tab">{% trans "History" %}</a></li>
+      <li><a href="#activity" data-toggle="tab" data-load="activity" data-yearly="{% url 'yearly_activity' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}" data-monthly="{% url 'monthly_activity' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}">{% trans "Activity" %}</a></li>
+      <li><a href="#stats" data-toggle="tab">{% trans "Statistics" %}</a></li>
+    </ul>
+  </li>
   <li class="dropdown">
     <a class="dropdown-toggle" data-toggle="dropdown" href="#">
       {% trans "Files" %} <span class="caret"></span>
@@ -46,12 +56,6 @@
     <ul class="dropdown-menu">
       <li><a href="{% url 'data_project' project=object.subproject.project.slug  %}">{% trans "Data exports" %}</a></li>
       <li><a href="#locking" data-toggle="tab">{% trans "Locking" %}</a></li>
-      {% if user_can_commit_translation %}
-      <li><a href="{{ object.get_commit_url }}" class="link-post">{% trans "Commit" %}</a></li>
-      {% endif %}
-      {% if user_can_see_repository_status %}
-      <li><a href="#repository" data-toggle="tab" data-href="{% url 'git_status_translation' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}">{% trans "Repository maintenance" %}</a></li>
-      {% endif %}
       {% if autoform %}
       <li><a href="#auto" data-toggle="tab">{% trans "Automatic translation" %}</a></li>
       {% endif %}
@@ -60,6 +64,21 @@
       {% endif %}
     </ul>
   </li>
+  {% if user_can_commit_translation or user_can_see_repository_status %}
+  <li class="dropdown">
+    <a class="dropdown-toggle" data-toggle="dropdown" href="#">
+      {% trans "Manage" %} <span class="caret"></span>
+    </a>
+    <ul class="dropdown-menu">
+      {% if user_can_commit_translation %}
+      <li><a href="{{ object.get_commit_url }}" class="link-post">{% trans "Commit" %}</a></li>
+      {% endif %}
+      {% if user_can_see_repository_status %}
+      <li><a href="#repository" data-toggle="tab" data-href="{% url 'git_status_translation' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}">{% trans "Repository maintenance" %}</a></li>
+      {% endif %}
+    </ul>
+  </li>
+  {% endif %}
 {% if enable_sharing %}
   <li class="dropdown">
     <a class="dropdown-toggle" data-toggle="dropdown" href="#">
@@ -67,7 +86,7 @@
     </a>
     <ul class="dropdown-menu">
 {% with object.get_share_url as share_url and object.get_widgets_url as widgets_url %}
-      <li><a href="http://www.facebook.com/sharer.php?u={{ share_url }}">{% trans "Share on Facebook!" %}</a></li>
+      <li><a href="https://www.facebook.com/sharer.php?u={{ share_url }}">{% trans "Share on Facebook!" %}</a></li>
       <li><a href="https://twitter.com/share?text={% blocktrans %}Translate {{ object }} using %23Weblate at {{ share_url }}!{% endblocktrans %}">{% trans "Tweet this translation!" %}</a></li>
       <li><a href="{% url 'engage' project=object.subproject.project.slug %}">{% trans "Engage page" %}</a></li>
       <li><a href="{{ widgets_url }}">{% trans "Status widgets" %}</a></li>
@@ -75,21 +94,22 @@
     </ul>
   </li>
 {% endif %}
+{% with object.subproject.project as project %}
+{% include "watch-dropdown.html" %}
+{% endwith %}
 </ul>
 
 
 <div class="tab-content">
 <div class="tab-pane active" id="overview">
 
-<div class="container-fluid">
-<div class="row">
-<div class="col-lg-6">
 <div class="panel panel-primary">
   <div class="panel-heading"><h4 class="panel-title">{% trans "Translation status" %}</h4></div>
-  <div class="panel-body">
 
 {% if object.is_template %}
+  <div class="panel-body">
 {% show_message "warning" _("This translation is being used as source strings within this component.") %}
+  </div>
 {% endif %}
 
 <table class="table">
@@ -97,6 +117,9 @@
 <th>{% trans "Strings" %}<span class="badge pull-right flip">{{ object.total }}</span></th>
 <td class="progress-cell">{% translation_progress object %}</td>
 <td class="percent">{{ object.get_translated_percent }}%</td>
+<td rowspan="2">
+<a href="{{ object.get_translate_url }}?type={% if object.untranslated > 0 %}untranslated{% else %}all{% endif %}" class="pull-right flip btn btn-default"><i class="fa fa-pencil"></i> {% trans "Translate" %}</a>
+</td>
 </tr>
 
 <tr>
@@ -106,6 +129,7 @@
 </tr>
 </table>
 
+  <div class="panel-body">
 {% include "legend.html" %}
 
 </div>
@@ -119,22 +143,28 @@
 {% trans "Strings to check" %}
 </h4>
 </div>
-  <div class="panel-body">
 <div class="list-group">
 {% for c in object.get_translation_checks %}
 <a class="list-group-item list-group-item-{{ c.3 }}" href="{{ object.get_translate_url }}?type={{ c.0 }}">{% if c.4 %}<span class="badge">{% blocktrans count c.4 as count %}{{ count }} word{% plural %}{{ count }} words{% endblocktrans %}</span>{% endif %}<span class="badge">{{ c.2 }}</span>{{ c.1 }}</a>
 {% endfor %}
 </div>
 </div>
+
+{% if other_translations %}
+<div class="panel panel-primary">
+  <div class="panel-heading"><h4 class="panel-title">{% trans "Other components" %}</h4></div>
+{% with other_translations as translations %}
+{% include "list-translations.html" %}
+{% endwith %}
+    <div class="panel-body">{% include "legend.html" %}</div>
+</div>
+{% endif %}
+
 </div>
 
-</div>
-
-<div class="col-lg-6">
-
+<div class="tab-pane" id="information">
 <div class="panel panel-primary">
   <div class="panel-heading"><h4 class="panel-title">{% trans "Project Information" %}</h4></div>
-  <div class="panel-body">
 
 <table class="table">
 {% with object.subproject as object %}
@@ -195,24 +225,6 @@
 </div>
 </div>
 
-{% if other_translations %}
-<div class="panel panel-primary">
-  <div class="panel-heading"><h4 class="panel-title">{% trans "Other components" %}</h4></div>
-  <div class="panel-body">
-{% with other_translations as translations %}
-{% include "list-translations.html" %}
-{% endwith %}
-</div>
-</div>
-{% endif %}
-
-</div>
-
-</div>
-</div>
-
-
-</div>
 
 <div class="tab-pane" id="history">
 {% include "last-changes-content.html" %}
@@ -222,7 +234,7 @@
 
 {% if autoform %}
 <div class="tab-pane" id="auto">
-<form action="{% url 'auto_translation' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}" method="post" enctype="multipart/form-data">
+<form action="{% url 'auto_translation' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}" method="post" enctype="multipart/form-data" data-persist="auto-translation">
 <div class="panel panel-primary">
 <div class="panel-heading"><h4 class="panel-title">{% trans "Automatic translation" %}</h4></div>
 <div class="panel-body">
@@ -258,11 +270,11 @@
 
 {% if user_can_upload_translation %}
 <div class="tab-pane" id="upload">
-<form action="{% url 'upload_translation' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}" method="post" enctype="multipart/form-data">
+<form action="{% url 'upload_translation' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}" method="post" enctype="multipart/form-data" data-persist="upload-translation">
 <div class="panel panel-primary">
 <div class="panel-heading"><h4 class="panel-title">{% trans "Upload" %}</h4></div>
 <div class="panel-body">
-{% if perms.trans.overwrite_translation %}
+{% if user_can_overwrite_translation %}
 <p>{% trans "Uploaded file will be merged with current translation. In case you want to overwrite already translated strings, don't forget to enable it." %}</p>
 {% else %}
 <p>{% trans "Uploaded file will be merged with current translation." %}</p>
@@ -296,14 +308,16 @@
 {% else %}
 <p>{% trans "Translation is currently not locked." %}</p>
 {% endif %}
-{% if perms.trans.lock_translation %}
+</div>
+{% if user_can_lock_translation %}
+<div class="panel-footer">
 {% if object.lock_user == request.user %}
-<a class="btn btn-default" href="{% url 'unlock_translation' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}">{% trans "Unlock" %}</a>
+<a class="btn btn-default link-post" href="{% url 'unlock_translation' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}">{% trans "Unlock" %}</a>
 {% elif not object.is_user_locked %}
-<a class="btn btn-default" href="{% url 'lock_translation' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}">{% trans "Lock" %}</a>
-{% endif %}
+<a class="btn btn-default link-post" href="{% url 'lock_translation' project=object.subproject.project.slug subproject=object.subproject.slug lang=object.language.code %}">{% trans "Lock" %}</a>
 {% endif %}
 </div>
+{% endif %}
 
 </div>
 </div>
@@ -313,7 +327,7 @@
 <div class="row">
 <div class="col-lg-6">
 
-<form action="{{ object.get_translate_url }}" method="GET">
+<form action="{{ object.get_translate_url }}" method="GET" data-persist="search-translation">
 <div class="panel panel-primary">
 <div class="panel-heading"><h4 class="panel-title">{% trans "Search" %}</h4></div>
   <div class="panel-body">
@@ -355,7 +369,6 @@
 <div class="col-lg-6">
 <div class="panel panel-primary">
 <div class="panel-heading"><h4 class="panel-title">{% trans "Statistics" %}</h4></div>
-<div class="panel-body">
 <table class="table">
 <thead>
 <tr>
@@ -392,7 +405,6 @@
 </tr>
 </tbody>
 </table>
-</div>
 
 </div>
 
@@ -402,7 +414,6 @@
 <div class="col-lg-6">
 <div class="panel panel-primary">
 <div class="panel-heading"><h4 class="panel-title">{% trans "Last activity" %}</h4></div>
-<div class="panel-body">
 <table class="table">
 <tbody>
 <tr>
@@ -415,7 +426,6 @@
 </tr>
 </tbody>
 </table>
-</div>
 </div>
 </div>
 

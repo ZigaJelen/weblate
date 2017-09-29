@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2016 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -15,11 +15,13 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+
+from whoosh.index import LockError
 
 from weblate.trans.models import IndexUpdate, Unit
 from weblate.trans.search import update_index, delete_search_units
@@ -40,8 +42,14 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        self.do_update(options['limit'])
-        self.do_delete(options['limit'])
+        try:
+            self.do_update(options['limit'])
+            self.do_delete(options['limit'])
+        except LockError:
+            raise CommandError(
+                'Failed to acquire lock on the fulltext index, '
+                'probably some other update is already running.'
+            )
 
     def do_delete(self, limit):
         indexupdates = set()
@@ -69,7 +77,6 @@ class Command(BaseCommand):
     def do_update(self, limit):
         indexupdates = set()
         unit_ids = set()
-        source_unit_ids = set()
 
         # Grab all updates from the database
         with transaction.atomic():
@@ -78,19 +85,13 @@ class Command(BaseCommand):
                 indexupdates.add(update.pk)
                 unit_ids.add(update.unitid)
 
-                if update.source:
-                    source_unit_ids.add(update.unitid)
-
         # Filter matching units
         units = Unit.objects.filter(
             id__in=unit_ids
         )
-        source_units = Unit.objects.filter(
-            id__in=source_unit_ids
-        )
 
         # Udate index
-        update_index(units, source_units)
+        update_index(units)
 
         # Delete processed updates
         with transaction.atomic():

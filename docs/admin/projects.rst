@@ -15,7 +15,7 @@ files (matching mask defined in :ref:`component`) appear in VCS repository.
 
 .. note::
 
-    You can share cloned VCS repositories using :ref:`internal-urls`.
+    You can share cloned VCS repositories using :ref:`internal-urls`. Using shared repositories feature is highly recommended when you have many components that use the same VCS. It will improve performance and use less disk space.
 
 .. _admin-interface:
 
@@ -115,9 +115,6 @@ Mailing list
     Mailing list where translators can discuss or comment translations.
 Translation instructions
     URL where you have more detailed instructions for translators.
-Push on commit
-    Whether any committed changes should be automatically pushed to upstream
-    repository.
 Set Translation-Team header
     Whether Weblate should manage Translation-Team header (this is
     :ref:`gettext` only feature right now).
@@ -125,10 +122,6 @@ Enable ACL
     Enable per project access control, see :ref:`acl` for more details.
 Enable hooks
     Whether unauthenticated :ref:`hooks` will be enabled for this repository.
-Owners
-    You can also configure project owners, who will always get important
-    notifications about project and will have additional privileges to control
-    translations within this project (see :ref:`privileges`).
 Source language
     Language used for source strings in all components. Change this if you are 
     translating from something else than English.
@@ -190,6 +183,14 @@ Repository push URL
 Repository browser
     URL of repository browser to display source files (location where messages
     are used). When empty no such links will be generated.
+
+    You can use following format strings:
+        
+    * ``%(branchs)s`` - current branch
+    * ``%(line)s`` - line in file
+    * ``%(file)s`` - filename
+    * ``%(../file)s`` - filename in parent directory
+    * ``%(../../file)s`` - filename in grandparent directory
 
     For example on GitHub, you would use something like
     ``https://github.com/WeblateOrg/hello/blob/%(branch)s/%(file)s#L%(line)s``.
@@ -282,6 +283,13 @@ Committer email
     Email of commiter used on Weblate commits, the author will be always the
     real translator. On some VCS this might be not supported. Default value
     can be changed by :setting:`DEFAULT_COMMITER_EMAIL`.
+Push on commit
+    Whether any committed changes should be automatically pushed to upstream
+    repository.
+Age of changes to commit
+    Configures how old changes (in hours) will be committed by
+    :djadmin:`commit_pending` management command (usually executed by cron).
+    Default value can be changed by :setting:`COMMIT_PENDING_HOURS`.
 Language filter
     Regular expression which is used to filter translation when scanning for
     file mask. This can be used to limit list of languages managed by Weblate
@@ -309,6 +317,8 @@ strings in the message:
     Component name
 ``%(project)s``
     Project name
+``%(url)s``
+    Translation URL
 ``%(total)s``
     Total strings count
 ``%(fuzzy)s``

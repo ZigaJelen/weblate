@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2016 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -15,19 +15,23 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
 from django.http import HttpResponse, Http404
 from django.shortcuts import redirect
 from django.core.urlresolvers import reverse
+from django.views.decorators.vary import vary_on_cookie
 from django.views.decorators.cache import cache_page
 
 from weblate.trans.site import get_site_url
 from weblate.lang.models import Language
-from weblate.trans.forms import EnageLanguageForm
+from weblate.trans.forms import EngageForm
+from weblate.trans.models import SubProject
 from weblate.trans.widgets import WIDGETS
-from weblate.trans.views.helper import get_project, try_set_language
+from weblate.trans.views.helper import (
+    get_project, get_subproject, try_set_language,
+)
 from weblate.trans.util import render
 
 
@@ -40,9 +44,7 @@ def widgets_root(request):
 
 
 def widgets_sorter(widget):
-    """
-    Provides better ordering of widgets.
-    """
+    """Provide better ordering of widgets."""
     return WIDGETS[widget].order
 
 
@@ -50,49 +52,44 @@ def widgets(request, project):
     obj = get_project(request, project)
 
     # Parse possible language selection
-    form = EnageLanguageForm(obj, request.GET)
+    form = EngageForm(obj, request.GET)
     lang = None
-    if form.is_valid() and form.cleaned_data['lang'] != '':
-        lang = Language.objects.get(code=form.cleaned_data['lang'])
+    component = None
+    if form.is_valid():
+        if form.cleaned_data['lang']:
+            lang = Language.objects.get(code=form.cleaned_data['lang']).code
+        if form.cleaned_data['component']:
+            component = SubProject.objects.get(
+                slug=form.cleaned_data['component'],
+                project=obj
+            ).slug
 
-    if lang is None:
-        engage_base = reverse('engage', kwargs={'project': obj.slug})
-    else:
-        engage_base = reverse(
-            'engage-lang',
-            kwargs={'project': obj.slug, 'lang': lang.code}
-        )
-    engage_url = get_site_url(engage_base)
-    engage_url_track = '%s?utm_source=widget' % engage_url
+    kwargs = {'project': obj.slug}
+    if lang is not None:
+        kwargs['lang'] = lang
+    engage_url = get_site_url(reverse('engage', kwargs=kwargs))
+    engage_url_track = '{0}?utm_source=widget'.format(engage_url)
     widget_base_url = get_site_url(
         reverse('widgets', kwargs={'project': obj.slug})
     )
     widget_list = []
     for widget_name in sorted(WIDGETS, key=widgets_sorter):
         widget_class = WIDGETS[widget_name]
+        if not widget_class.show:
+            continue
         color_list = []
         for color in widget_class.colors:
-            if lang is None:
-                color_url = reverse(
-                    'widget-image',
-                    kwargs={
-                        'project': obj.slug,
-                        'widget': widget_name,
-                        'color': color,
-                        'extension': widget_class.extension,
-                    }
-                )
-            else:
-                color_url = reverse(
-                    'widget-image-lang',
-                    kwargs={
-                        'project': obj.slug,
-                        'widget': widget_name,
-                        'color': color,
-                        'lang': lang.code,
-                        'extension': widget_class.extension,
-                    }
-                )
+            kwargs = {
+                'project': obj.slug,
+                'widget': widget_name,
+                'color': color,
+                'extension': widget_class.extension,
+            }
+            if lang is not None:
+                kwargs['lang'] = lang
+            if component is not None:
+                kwargs['subproject'] = component
+            color_url = reverse('widget-image', kwargs=kwargs)
             color_list.append({
                 'name': color,
                 'url': get_site_url(color_url),
@@ -119,10 +116,14 @@ def widgets(request, project):
 
 
 @cache_page(3600)
+@vary_on_cookie
 def render_widget(request, project, widget='287x66', color=None, lang=None,
-                  extension='png'):
+                  subproject=None, extension='png'):
     # We intentionally skip ACL here to allow widget sharing
-    obj = get_project(request, project, skip_acl=True)
+    if subproject is None:
+        obj = get_project(request, project, skip_acl=True)
+    else:
+        obj = get_subproject(request, project, subproject, skip_acl=True)
 
     # Handle language parameter
     if lang is not None:
@@ -139,19 +140,29 @@ def render_widget(request, project, widget='287x66', color=None, lang=None,
         raise Http404()
 
     # Construct object
-    widget = widget_class(obj, color, lang)
+    widget_obj = widget_class(obj, color, lang)
 
     # Redirect widget
-    if hasattr(widget, 'redirect'):
-        return redirect(widget.redirect())
+    if hasattr(widget_obj, 'redirect'):
+        return redirect(widget_obj.redirect(), permanent=True)
+
+    # Invalid extension
+    if extension != widget_obj.extension or color != widget_obj.color:
+        kwargs = {
+            'project': project,
+            'widget': widget,
+            'color': widget_obj.color,
+            'extension': widget_obj.extension,
+        }
+        if lang:
+            kwargs['lang'] = lang.code
+            return redirect('widget-image', permanent=True, **kwargs)
+        return redirect('widget-image', permanent=True, **kwargs)
 
     # Render widget
-    widget.render()
-
-    # Get image data
-    data = widget.get_image()
+    widget_obj.render()
 
     return HttpResponse(
-        content_type=widget.content_type,
-        content=data
+        content_type=widget_obj.content_type,
+        content=widget_obj.get_content()
     )

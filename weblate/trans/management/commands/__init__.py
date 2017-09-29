@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2016 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -15,23 +15,42 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-'''
-Helper classes for management commands.
-'''
+"""Helper classes for management commands."""
+
+import logging
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from weblate.lang.models import Language
 from weblate.trans.models import Unit, SubProject, Translation
+from weblate.logger import LOGGER
 
 
 class WeblateCommand(BaseCommand):
-    '''
-    Command which accepts project/component/--all params to process.
-    '''
+    def execute(self, *args, **options):
+        """Wrapper to configure logging prior execution."""
+        verbosity = int(options['verbosity'])
+        if verbosity > 1:
+            LOGGER.setLevel(logging.DEBUG)
+        elif verbosity == 1:
+            LOGGER.setLevel(logging.INFO)
+        else:
+            LOGGER.setLevel(logging.ERROR)
+        super(WeblateCommand, self).execute(*args, **options)
+
+    def handle(self, *args, **options):
+        """
+        The actual logic of the command. Subclasses must implement
+        this method.
+        """
+        raise NotImplementedError()
+
+
+class WeblateComponentCommand(WeblateCommand):
+    """Command which accepts project/component/--all params to process."""
     def add_arguments(self, parser):
         parser.add_argument(
             '--all',
@@ -47,9 +66,7 @@ class WeblateCommand(BaseCommand):
         )
 
     def get_units(self, **options):
-        '''
-        Returns list of units matching parameters.
-        '''
+        """Return list of units matching parameters."""
         if options['all']:
             return Unit.objects.all()
         return Unit.objects.filter(
@@ -57,9 +74,7 @@ class WeblateCommand(BaseCommand):
         )
 
     def iterate_units(self, **options):
-        """
-        Memory effective iteration over units.
-        """
+        """Memory effective iteration over units."""
         units = self.get_units(**options).order_by('pk')
         count = units.count()
         if not count:
@@ -90,17 +105,13 @@ class WeblateCommand(BaseCommand):
         self.stdout.write('Operation completed')
 
     def get_translations(self, **options):
-        '''
-        Returns list of translations matching parameters.
-        '''
+        """Return list of translations matching parameters."""
         return Translation.objects.filter(
             subproject__in=self.get_subprojects(**options)
         )
 
     def get_subprojects(self, **options):
-        '''
-        Returns list of components matching parameters.
-        '''
+        """Return list of components matching parameters."""
         if options['all']:
             # all components
             result = SubProject.objects.all()
@@ -130,7 +141,7 @@ class WeblateCommand(BaseCommand):
                 # warn on no match
                 if found.count() == 0:
                     self.stderr.write(
-                        '"%s" did not match any components' % arg
+                        '"{0}" did not match any components'.format(arg)
                     )
                     raise CommandError('Nothing to process!')
 
@@ -143,16 +154,15 @@ class WeblateCommand(BaseCommand):
         """
         The actual logic of the command. Subclasses must implement
         this method.
-
         """
         raise NotImplementedError()
 
 
-class WeblateLangCommand(WeblateCommand):
-    '''
+class WeblateLangCommand(WeblateComponentCommand):
+    """
     Command accepting additional language parameter to filter
     list of languages to process.
-    '''
+    """
     def add_arguments(self, parser):
         super(WeblateLangCommand, self).add_arguments(parser)
         parser.add_argument(
@@ -164,9 +174,7 @@ class WeblateLangCommand(WeblateCommand):
         )
 
     def get_units(self, **options):
-        '''
-        Returns list of units matching parameters.
-        '''
+        """Return list of units matching parameters."""
         units = super(WeblateLangCommand, self).get_units(**options)
 
         if options['lang'] is not None:
@@ -177,9 +185,7 @@ class WeblateLangCommand(WeblateCommand):
         return units
 
     def get_translations(self, **options):
-        '''
-        Returns list of translations matching parameters.
-        '''
+        """Return list of translations matching parameters."""
         result = super(WeblateLangCommand, self).get_translations(
             **options
         )
@@ -194,7 +200,6 @@ class WeblateLangCommand(WeblateCommand):
         """
         The actual logic of the command. Subclasses must implement
         this method.
-
         """
         raise NotImplementedError()
 
@@ -244,6 +249,5 @@ class WeblateTranslationCommand(BaseCommand):
         """
         The actual logic of the command. Subclasses must implement
         this method.
-
         """
         raise NotImplementedError()
