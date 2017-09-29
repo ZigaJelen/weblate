@@ -22,7 +22,7 @@
 {% can_lock_translation user object.subproject.project as user_can_lock_translation %}
 {% can_overwrite_translation user object.subproject.project as user_can_overwrite_translation %}
 {% can_upload_translation user object as user_can_upload_translation %}
-{% can_upload_screenshot user object.subproject.project as user_can_upload_screenshot %}
+{% can_change_screenshot user object.subproject.project as user_can_change_screenshot %}
 
 
 {% include "show-lock.html" %}
@@ -185,7 +185,7 @@
 {{ object.filename }}
 </td>
 </tr>
-{% if user_can_upload_screenshot %}
+{% if user_can_change_screenshot %}
 <tr>
 <th>{% trans "Posodobi na strežniku" %}</th>
 <td>
