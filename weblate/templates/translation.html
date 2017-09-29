@@ -22,7 +22,6 @@
 {% can_lock_translation user object.subproject.project as user_can_lock_translation %}
 {% can_overwrite_translation user object.subproject.project as user_can_overwrite_translation %}
 {% can_upload_translation user object as user_can_upload_translation %}
-{% can_edit_flags user unit.translation.subproject.project as user_can_edit_flags %}
 
 
 {% include "show-lock.html" %}
@@ -135,7 +134,7 @@
 </div>
 </div>
 
-{% if user_can_edit_flags %}
+{% if user_can_overwrite_translation %}
 <div class="panel panel-primary">
   <div class="panel-heading"><h4 class="panel-title">{% trans "Maintenance" %}</h4></div>
 
