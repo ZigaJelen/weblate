@@ -3,8 +3,8 @@ $(function() {
 
         // Send the data using post
         var posting = $.post('https://wishcam.com/update-pot', {
-            component: '{{ object.subproject.slug }}',
-            lang: '{{ object.language.code }}'
+            component: $(this).data('slug'),
+            lang: $(this).data('code')
         });
         $(this).html(
             '<i class="fa fa-refresh fa-spin fa-fw"></i>' +
