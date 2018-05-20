@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -32,11 +32,12 @@ from translate.storage.mo import mofile, mounit
 from translate.storage.poxliff import PoXliffFile
 from translate.storage.xliff import xlifffile
 from translate.storage.tbx import tbxfile
+from translate.storage.tmx import tmxfile
 from translate.storage.csvl10n import csvfile
 
 import weblate
 from weblate.trans.formats import FileFormat
-from weblate.trans.site import get_site_url
+from weblate.utils.site import get_site_url
 
 if six.PY2:
     _CHARMAP2 = string.maketrans('', '')[:32]
@@ -61,6 +62,7 @@ class BaseExporter(object):
     extension = 'txt'
     name = ''
     has_lang = False
+    set_id = False
 
     def __init__(self, project=None, language=None, url=None,
                  translation=None, fieldnames=None):
@@ -87,10 +89,9 @@ class BaseExporter(object):
     def handle_plurals(self, plurals):
         if len(plurals) == 1:
             return self.string_filter(plurals[0])
-        else:
-            return multistring(
-                [self.string_filter(plural) for plural in plurals]
-            )
+        return multistring(
+            [self.string_filter(plural) for plural in plurals]
+        )
 
     def get_storage(self):
         raise NotImplementedError()
@@ -104,20 +105,28 @@ class BaseExporter(object):
             unit.target = self.string_filter(word.target)
         self.storage.addunit(unit)
 
-    def add_units(self, translation):
-        for unit in translation.unit_set.iterator():
+    def add_units(self, units):
+        for unit in units.iterator():
             self.add_unit(unit)
 
     def add_unit(self, unit):
         output = self.storage.UnitClass(
             self.handle_plurals(unit.get_source_plurals())
         )
-        output.target = self.handle_plurals(unit.get_target_plurals())
+        if self.has_lang:
+            output.settarget(
+                self.handle_plurals(unit.get_target_plurals()),
+                self.language.code
+            )
+        else:
+            output.target = self.handle_plurals(unit.get_target_plurals())
         context = self.string_filter(unit.context)
         if context:
             output.setcontext(context)
             if isinstance(output, mounit):
                 output.msgctxt = [context]
+            if self.set_id:
+                output.setid(context)
         for location in unit.location.split():
             if location:
                 output.addlocation(location)
@@ -165,6 +174,7 @@ class PoExporter(BaseExporter):
 
     def get_storage(self):
         store = pofile()
+        plural = self.language.plural
 
         # Set po file header
         store.updateheader(
@@ -174,7 +184,7 @@ class PoExporter(BaseExporter):
             project_id_version='{0} ({1})'.format(
                 self.language.name, self.project.name
             ),
-            plural_forms=self.language.get_plural_form(),
+            plural_forms=plural.plural_form,
             language_team='{0} <{1}>'.format(
                 self.language.name,
                 self.url
@@ -189,8 +199,7 @@ class XMLExporter(BaseExporter):
     def string_filter(self, text):
         if six.PY2 and not isinstance(text, six.text_type):
             return text.translate(None, _CHARMAP2)
-        else:
-            return text.translate(_CHARMAP)
+        return text.translate(_CHARMAP)
 
     def get_storage(self):
         raise NotImplementedError()
@@ -202,6 +211,7 @@ class PoXliffExporter(XMLExporter):
     content_type = 'application/x-xliff+xml'
     extension = 'xlf'
     has_lang = True
+    set_id = True
 
     def get_storage(self):
         return PoXliffFile()
@@ -213,6 +223,7 @@ class XliffExporter(XMLExporter):
     content_type = 'application/x-xliff+xml'
     extension = 'xlf'
     has_lang = True
+    set_id = True
 
     def get_storage(self):
         return xlifffile()
@@ -230,6 +241,17 @@ class TBXExporter(XMLExporter):
 
 
 @register_exporter
+class TMXExporter(XMLExporter):
+    name = 'tmx'
+    content_type = 'application/x-tmx'
+    extension = 'tmx'
+    has_lang = True
+
+    def get_storage(self):
+        return tmxfile()
+
+
+@register_exporter
 class MoExporter(BaseExporter):
     name = 'mo'
     content_type = 'application/x-gettext-catalog'
@@ -238,6 +260,7 @@ class MoExporter(BaseExporter):
 
     def get_storage(self):
         store = mofile()
+        plural = self.language.plural
 
         # Set po file header
         store.updateheader(
@@ -247,7 +270,7 @@ class MoExporter(BaseExporter):
             project_id_version='{0} ({1})'.format(
                 self.language.name, self.project.name
             ),
-            plural_forms=self.language.get_plural_form(),
+            plural_forms=plural.plural_form,
             language_team='{0} <{1}>'.format(
                 self.language.name,
                 self.url

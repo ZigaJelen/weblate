@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -60,6 +60,7 @@ def find_git_http_backend():
         if os.path.exists(name):
             find_git_http_backend.result = name
             return name
+    return None
 
 
 def response_authenticate():
@@ -122,7 +123,7 @@ def git_export(request, project, subproject, path):
     try:
         obj = get_subproject(request, project, subproject)
     except Http404:
-        if not request.user.is_authenticated():
+        if not request.user.is_authenticated:
             return response_authenticate()
         raise
     if not can_access_vcs(request.user, obj.project):
@@ -143,7 +144,7 @@ def run_git_http(request, obj, path):
         [git_http_backend],
         env={
             'REQUEST_METHOD': request.method,
-            'PATH_TRANSLATED': os.path.join(obj.get_path(), path),
+            'PATH_TRANSLATED': os.path.join(obj.full_path, path),
             'GIT_HTTP_EXPORT_ALL': '1',
             'CONTENT_TYPE': request.META.get('CONTENT_TYPE', ''),
             'QUERY_STRING': request.META.get('QUERY_STRING', ''),

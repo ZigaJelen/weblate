@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -99,6 +99,8 @@ class Command(BaseCommand):
             data = json.load(options['json-file'])
         except ValueError:
             raise CommandError('Failed to parse JSON file!')
+        finally:
+            options['json-file'].close()
 
         for item in data:
             if ('filemask' not in item or

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -45,7 +45,7 @@ ADMIN_PERMS = {
     'delete_dictionary',
     'lock_subproject',
     'reset_translation',
-    'lock_translation',
+    'review_translation',
     'can_see_git_repository',
     'add_comment',
     'delete_comment',
@@ -66,6 +66,7 @@ ADMIN_PERMS = {
     'change_screenshot',
     'access_vcs',
     'access_project',
+    'add_unit',
 }
 
 
@@ -90,7 +91,6 @@ DEFAULT_GROUPS = {
         'add_dictionary',
         'change_dictionary',
         'delete_dictionary',
-        'lock_translation',
         'can_see_git_repository',
         'add_comment',
         'add_suggestion',
@@ -98,6 +98,18 @@ DEFAULT_GROUPS = {
         'add_translation',
         'delete_translation',
         'access_vcs',
+    },
+    'Reviewers': {
+        'review_translation',
+        'save_translation',
+        'save_template',
+        'accept_suggestion',
+        'delete_suggestion',
+        'vote_suggestion',
+        'override_suggestion',
+        'add_comment',
+        'add_suggestion',
+        'access_project',
     },
     'Managers': ADMIN_PERMS,
     '@Translate': {
@@ -109,7 +121,6 @@ DEFAULT_GROUPS = {
         'delete_suggestion',
         'vote_suggestion',
         'ignore_check',
-        'lock_translation',
         'add_comment',
         'add_suggestion',
         'use_mt',
@@ -124,7 +135,6 @@ DEFAULT_GROUPS = {
         'delete_suggestion',
         'vote_suggestion',
         'ignore_check',
-        'lock_translation',
         'add_comment',
         'add_suggestion',
         'use_mt',
@@ -147,6 +157,18 @@ DEFAULT_GROUPS = {
         'delete_screenshot',
         'change_screenshot',
     },
+    '@Review': {
+        'access_project',
+        'review_translation',
+        'save_translation',
+        'save_template',
+        'override_suggestion',
+        'accept_suggestion',
+        'delete_suggestion',
+        'vote_suggestion',
+        'add_comment',
+        'add_suggestion',
+    },
     '@VCS': {
         'access_project',
         'commit_translation',
@@ -163,7 +185,7 @@ ADMIN_ONLY_PERMS = ADMIN_PERMS - DEFAULT_GROUPS['Users']
 # GroupACL filtered permissions
 PRIVATE_PERMS = ADMIN_PERMS
 PROTECTED_PERMS = ADMIN_PERMS - {'access_project'}
-PUBLIC_PERMS = ADMIN_ONLY_PERMS
+PUBLIC_PERMS = ADMIN_ONLY_PERMS - {'review_translation'}
 
 
 def translate_groups():
@@ -175,3 +197,4 @@ def translate_groups():
     pgettext('Permissions group', 'Screenshots')
     pgettext('Permissions group', 'Translate')
     pgettext('Permissions group', 'VCS')
+    pgettext('Permissions group', 'Review')

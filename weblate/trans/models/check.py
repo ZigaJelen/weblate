@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -22,38 +22,31 @@ from __future__ import unicode_literals
 
 from django.db import models
 from django.utils.encoding import python_2_unicode_compatible
-from weblate.lang.models import Language
+from django.utils.functional import cached_property
 from weblate.trans.checks import CHECKS
+from weblate.trans.models.unitdata import UnitData
 
 
 CHECK_CHOICES = [(x, CHECKS[x].name) for x in CHECKS]
 
 
 @python_2_unicode_compatible
-class Check(models.Model):
-    content_hash = models.BigIntegerField(db_index=True)
-    project = models.ForeignKey('Project')
-    language = models.ForeignKey(Language, null=True, blank=True)
+class Check(UnitData):
     check = models.CharField(max_length=50, choices=CHECK_CHOICES)
     ignore = models.BooleanField(db_index=True, default=False)
 
     _for_unit = None
-    _check_obj = None
-    _check_obj_valid = False
 
     @property
     def for_unit(self):
         return self._for_unit
 
-    @property
+    @cached_property
     def check_obj(self):
-        if not self._check_obj_valid:
-            try:
-                self._check_obj = CHECKS[self.check]
-            except KeyError:
-                self._check_obj = None
-            self._check_obj_valid = True
-        return self._check_obj
+        try:
+            return CHECKS[self.check]
+        except KeyError:
+            return None
 
     @for_unit.setter
     def for_unit(self, value):
@@ -65,6 +58,9 @@ class Check(models.Model):
         )
         app_label = 'trans'
         unique_together = ('content_hash', 'project', 'language', 'check')
+        index_together = [
+            ('project', 'language', 'content_hash'),
+        ]
 
     def __str__(self):
         return '{0}/{1}: {2}'.format(

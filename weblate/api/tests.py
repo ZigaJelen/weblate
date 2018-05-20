@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -20,7 +20,7 @@
 
 from django.contrib.auth.models import User, Group
 from django.core.files import File
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 from rest_framework.test import APITestCase
 
@@ -182,7 +182,7 @@ class ProjectAPITest(APIBaseTest):
             'api:project-changes',
             self.project_kwargs,
         )
-        self.assertEqual(request.data['count'], 7)
+        self.assertEqual(request.data['count'], 8)
 
     def test_statistics(self):
         request = self.do_request(
@@ -331,7 +331,7 @@ class ComponentAPITest(APIBaseTest):
             'api:component-changes',
             self.component_kwargs,
         )
-        self.assertEqual(request.data['count'], 7)
+        self.assertEqual(request.data['count'], 8)
 
 
 class LanguageAPITest(APIBaseTest):
@@ -426,13 +426,14 @@ class TranslationAPITest(APIBaseTest):
 
     def test_upload(self):
         self.authenticate()
-        response = self.client.put(
-            reverse(
-                'api:translation-file',
-                kwargs=self.translation_kwargs
-            ),
-            {'file': open(TEST_PO, 'rb')},
-        )
+        with open(TEST_PO, 'rb') as handle:
+            response = self.client.put(
+                reverse(
+                    'api:translation-file',
+                    kwargs=self.translation_kwargs
+                ),
+                {'file': handle},
+            )
         self.assertEqual(
             response.data,
             {
@@ -444,6 +445,18 @@ class TranslationAPITest(APIBaseTest):
                 'total': 5
             }
         )
+
+    def test_upload_content(self):
+        self.authenticate()
+        with open(TEST_PO, 'rb') as handle:
+            response = self.client.put(
+                reverse(
+                    'api:translation-file',
+                    kwargs=self.translation_kwargs
+                ),
+                {'file': handle.read()},
+            )
+        self.assertEqual(response.status_code, 400)
 
     def test_upload_overwrite(self):
         self.test_upload()
@@ -582,10 +595,8 @@ class ScreenshotAPITest(APIBaseTest):
             name='Obrazek',
             component=self.subproject
         )
-        shot.image.save(
-            'screenshot.png',
-            File(open(TEST_SCREENSHOT, 'rb'))
-        )
+        with open(TEST_SCREENSHOT, 'rb') as handle:
+            shot.image.save('screenshot.png', File(handle))
 
     def test_list_screenshots(self):
         response = self.client.get(

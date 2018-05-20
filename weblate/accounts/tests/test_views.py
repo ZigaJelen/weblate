@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -22,7 +22,7 @@
 
 from django.test import TestCase
 from django.test.utils import override_settings
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core import mail
@@ -30,7 +30,7 @@ from django.core import mail
 from weblate.accounts.models import Profile
 from weblate.accounts.ratelimit import reset_rate_limit
 
-from weblate.trans.tests.test_views import ViewTestCase, FixtureTestCase
+from weblate.trans.tests.test_views import FixtureTestCase
 from weblate.lang.models import Language
 
 CONTACT_DATA = {
@@ -59,7 +59,10 @@ class ViewTest(TestCase):
         Profile.objects.get_or_create(user=user)
         return user
 
-    @override_settings(REGISTRATION_CAPTCHA=False)
+    @override_settings(
+        REGISTRATION_CAPTCHA=False,
+        ADMINS=(('Weblate test', 'noreply@weblate.org'), )
+    )
     def test_contact(self):
         """Test for contact form."""
         # Basic get
@@ -76,6 +79,25 @@ class ViewTest(TestCase):
             mail.outbox[0].subject,
             '[Weblate] Message from dark side'
         )
+        self.assertEqual(mail.outbox[0].to, ['noreply@weblate.org'])
+
+    @override_settings(
+        REGISTRATION_CAPTCHA=False,
+        ADMINS_CONTACT=['noreply@example.com'],
+    )
+    def test_contact_separate(self):
+        """Test for contact form."""
+        # Sending message
+        response = self.client.post(reverse('contact'), CONTACT_DATA)
+        self.assertRedirects(response, reverse('home'))
+
+        # Verify message
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(
+            mail.outbox[0].subject,
+            '[Weblate] Message from dark side'
+        )
+        self.assertEqual(mail.outbox[0].to, ['noreply@example.com'])
 
     @override_settings(REGISTRATION_CAPTCHA=False)
     def test_contact_invalid(self):
@@ -105,7 +127,11 @@ class ViewTest(TestCase):
         response = self.client.get(reverse('hosting'))
         self.assertRedirects(response, reverse('home'))
 
-    @override_settings(OFFER_HOSTING=True)
+    @override_settings(
+        REGISTRATION_CAPTCHA=False,
+        OFFER_HOSTING=True,
+        ADMINS_HOSTING=['noreply@example.com'],
+    )
     def test_hosting(self):
         """Test for hosting form with enabled hosting."""
         self.get_user()
@@ -138,6 +164,7 @@ class ViewTest(TestCase):
             'testuser',
             mail.outbox[0].body,
         )
+        self.assertEqual(mail.outbox[0].to, ['noreply@example.com'])
 
     def test_contact_subject(self):
         # With set subject
@@ -333,47 +360,9 @@ class ProfileTest(FixtureTestCase):
                 'languages': Language.objects.get(code='cs').id,
                 'secondary_languages': Language.objects.get(code='cs').id,
                 'first_name': 'First Last',
-                'email': 'noreply@weblate.org',
+                'email': 'weblate@example.org',
                 'username': 'testik',
                 'dashboard_view': Profile.DASHBOARD_WATCHED,
             }
         )
         self.assertRedirects(response, reverse('profile'))
-
-
-class RemoveAcccountTest(ViewTestCase):
-    def test_removal_nopass(self):
-        response = self.client.post(
-            reverse('remove'),
-            {
-                'password': 'invalid',
-            }
-        )
-        self.assertContains(response, 'You have entered an invalid password.')
-        self.assertTrue(
-            User.objects.filter(username='testuser').exists()
-        )
-
-    def test_removal(self):
-        response = self.client.post(
-            reverse('remove'),
-            {
-                'password': 'testpassword',
-            }
-        )
-        self.assertRedirects(response, reverse('home'))
-        self.assertFalse(
-            User.objects.filter(username='testuser').exists()
-        )
-
-    def test_removal_change(self):
-        self.edit_unit(
-            'Hello, world!\n',
-            'Nazdar svete!\n'
-        )
-        # We should have some change to commit
-        self.assertTrue(self.subproject.repo_needs_commit())
-        # Remove account
-        self.test_removal()
-        # Changes should be committed
-        self.assertFalse(self.subproject.repo_needs_commit())

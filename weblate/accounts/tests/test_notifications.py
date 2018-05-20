@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -37,12 +37,14 @@ from weblate.accounts.notifications import (
     notify_new_language,
     notify_account_activity,
 )
-from weblate.trans.tests.test_views import FixtureTestCase
+from weblate.trans.tests.test_views import (
+    FixtureTestCase, RegistrationTestMixin,
+)
 from weblate.trans.models import Suggestion, Comment
 from weblate.lang.models import Language
 
 
-class NotificationTest(FixtureTestCase):
+class NotificationTest(FixtureTestCase, RegistrationTestMixin):
     def setUp(self):
         super(NotificationTest, self).setUp()
         self.user.email = 'noreply@weblate.org'
@@ -157,8 +159,8 @@ class NotificationTest(FixtureTestCase):
             second_user
         )
 
-        # Check mail (second one is for admin)
-        self.assertEqual(len(mail.outbox), 2)
+        # Check mail
+        self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(
             mail.outbox[0].subject,
             '[Weblate] New language request in Test/Test'
@@ -172,8 +174,8 @@ class NotificationTest(FixtureTestCase):
             second_user,
         )
 
-        # Check mail (second one is for admin)
-        self.assertEqual(len(mail.outbox), 5)
+        # Check mail
+        self.assertEqual(len(mail.outbox), 3)
 
     def test_notify_new_contributor(self):
         unit = self.get_unit()
@@ -259,7 +261,4 @@ class NotificationTest(FixtureTestCase):
         request = self.get_request('/')
         notify_account_activity(request.user, request, 'password')
         self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(
-            mail.outbox[0].subject,
-            '[Weblate] Activity on your account at Weblate'
-        )
+        self.assert_notify_mailbox(mail.outbox[0])

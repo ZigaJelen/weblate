@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -103,7 +103,9 @@ def cache_permission(func):
         if target_object is None:
             obj_key = None
         else:
-            obj_key = target_object.get_full_slug()
+            obj_key = '{}-{}'.format(
+                target_object.__class__.__name__, target_object.pk
+            )
 
         if not hasattr(user, 'acl_permissions_cache'):
             user.acl_permissions_cache = {}
@@ -126,7 +128,7 @@ def can_edit(user, translation, permission):
         return False
     if not has_group_perm(user, permission, translation):
         return False
-    if translation.is_template() \
+    if translation.is_template \
             and not has_group_perm(user, 'trans.save_template', translation):
         return False
     if (not has_group_perm(user, 'trans.override_suggestion', translation) and
@@ -144,15 +146,20 @@ def can_upload_translation(user, translation):
     actually store the uploaded translations.
     """
     return can_edit(user, translation, 'trans.upload_translation') and (
-        can_translate(user, translation) or can_suggest(user, translation)
+        can_translate(user, translation=translation)
+        or can_suggest(user, translation)
     )
 
 
 @cache_permission
-def can_translate(user, translation=None, project=None):
+def can_translate(user, unit=None, translation=None, project=None):
     """Check whether user can translate given translation."""
     if project is not None:
         return has_group_perm(user, 'trans.save_translation', project=project)
+    if unit is not None:
+        translation = unit.translation
+        if unit.approved and not can_review(user, translation):
+            return False
     return can_edit(user, translation, 'trans.save_translation')
 
 
@@ -169,15 +176,43 @@ def can_suggest(user, translation):
 
 
 @cache_permission
-def can_accept_suggestion(user, translation):
+def can_review(user, translation):
+    """Check whether user can review given translation."""
+    if not translation.subproject.project.enable_review:
+        return False
+    return can_edit(user, translation, 'trans.review_translation')
+
+
+@cache_permission
+def can_review_project(user, project):
+    return (
+        project.enable_review and
+        has_group_perm(user, 'trans.review_translation', project=project)
+    )
+
+
+@cache_permission
+def can_add_unit(user, translation):
+    """Check whether user can add new unit for given translation."""
+    if not translation.is_template:
+        return False
+    return can_edit(user, translation, 'trans.add_unit')
+
+
+@cache_permission
+def can_accept_suggestion(user, unit=None, translation=None):
     """Check whether user can accept suggestions to given translation."""
+    if unit is not None:
+        translation = unit.translation
+        if unit.approved and not can_review(user, translation):
+            return False
     return can_edit(user, translation, 'trans.accept_suggestion')
 
 
 @cache_permission
 def _can_delete_suggestion(user, translation):
     """Check whether user can delete suggestions to given translation."""
-    return can_edit(user, translation, 'trans.delete_suggestion')
+    return has_group_perm(user, 'trans.delete_suggestion', translation)
 
 
 def can_delete_suggestion(user, translation, suggestion):
@@ -188,15 +223,19 @@ def can_delete_suggestion(user, translation, suggestion):
 
 
 @cache_permission
-def can_vote_suggestion(user, translation):
+def can_vote_suggestion(user, unit=None, translation=None):
     """Check whether user can vote suggestions on given translation."""
+    if unit is not None:
+        translation = unit.translation
+        if unit.approved and not can_review(user, translation):
+            return False
     if not translation.subproject.suggestion_voting:
         return False
     if translation.subproject.locked:
         return False
     if not has_group_perm(user, 'trans.vote_suggestion', translation):
         return False
-    if translation.is_template() \
+    if translation.is_template \
             and not has_group_perm(user, 'trans.save_template', translation):
         return False
     return True
@@ -209,7 +248,10 @@ def can_use_mt(user, translation):
         return False
     if not has_group_perm(user, 'trans.use_mt', translation):
         return False
-    return can_translate(user, translation) or can_suggest(user, translation)
+    return (
+        can_translate(user, translation=translation)
+        or can_suggest(user, translation)
+    )
 
 
 @cache_permission
@@ -243,12 +285,6 @@ def can_push_translation(user, project):
 def can_reset_translation(user, project):
     """Check whether user can reset translation repository."""
     return has_group_perm(user, 'trans.reset_translation', project=project)
-
-
-@cache_permission
-def can_lock_translation(user, project):
-    """Check whether user can lock translation."""
-    return has_group_perm(user, 'trans.lock_translation', project=project)
 
 
 @cache_permission
@@ -430,3 +466,14 @@ def check_access(request, project):
     """Raise an error if user is not allowed to access this project."""
     if not can_access_project(request.user, project):
         raise Http404('Access denied')
+
+
+@cache_permission
+def can_edit_access_control(user, project):
+    """Check whether user can edit given project."""
+    if 'weblate.billing' in settings.INSTALLED_APPS:
+        billings = project.billing_set.filter(plan__change_access_control=True)
+        if not billings.exists():
+            return False
+
+    return can_edit_project(user, project)

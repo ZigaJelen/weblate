@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -20,7 +20,7 @@
 
 """Test for locking."""
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 from weblate.trans.tests.test_views import FixtureTestCase
 from weblate.trans.models.subproject import SubProject
@@ -45,7 +45,7 @@ class LockTest(FixtureTestCase):
         )
         self.assertContains(
             response,
-            'This translation is currently locked for updates!'
+            'This translation is currently locked for updates.'
         )
 
     def assert_component_not_locked(self):
@@ -59,7 +59,7 @@ class LockTest(FixtureTestCase):
         )
         self.assertNotContains(
             response,
-            'This translation is currently locked for updates!'
+            'This translation is currently locked for updates.'
         )
 
     def test_subproject(self):
@@ -93,7 +93,7 @@ class LockTest(FixtureTestCase):
         )
         self.assertContains(
             response,
-            'This translation is currently locked for updates!'
+            'This translation is currently locked for updates.'
         )
 
         response = self.client.post(
@@ -101,24 +101,3 @@ class LockTest(FixtureTestCase):
         )
         self.assertRedirects(response, redirect_url)
         self.assert_component_not_locked()
-
-    def test_translation(self):
-        response = self.client.post(
-            reverse('lock_translation', kwargs=self.kw_translation)
-        )
-        redirect_url = '{}#locking'.format(
-            reverse('translation', kwargs=self.kw_translation)
-        )
-        self.assertRedirects(response, redirect_url)
-        self.assertTrue(self.get_translation().is_user_locked())
-
-        response = self.client.post(
-            reverse('unlock_translation', kwargs=self.kw_translation)
-        )
-        self.assertRedirects(response, redirect_url)
-        self.assertFalse(self.get_translation().is_user_locked())
-
-        response = self.client.post(
-            reverse('js-lock', kwargs=self.kw_translation)
-        )
-        self.assertFalse(self.get_translation().is_user_locked())

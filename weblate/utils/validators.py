@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -29,6 +29,8 @@ import six
 
 from django.core.exceptions import ValidationError
 from django.utils.translation import ugettext as _
+
+from weblate.utils.render import render_template
 
 
 ALLOWED_IMAGES = frozenset((
@@ -190,3 +192,13 @@ def validate_file_extension(value):
     if ext.lower() in FORBIDDEN_EXTENSIONS:
         raise ValidationError(_('Unsupported file format.'))
     return value
+
+
+def validate_render(value, **kwargs):
+    """Validates rendered template."""
+    try:
+        render_template(value, **kwargs)
+    except Exception as err:
+        raise ValidationError(
+            _('Failed to render template: {}').format(err)
+        )

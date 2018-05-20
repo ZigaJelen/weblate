@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -24,9 +24,12 @@ import os
 import sys
 import unicodedata
 
+from django.apps import apps
 from django.core.cache import cache
+from django.db.utils import OperationalError
 from django.http import HttpResponseRedirect
 from django.shortcuts import resolve_url, render as django_render, redirect
+from django.utils import timezone
 from django.utils.encoding import force_text
 from django.utils.http import is_safe_url
 from django.utils.translation import ugettext as _, ugettext_lazy
@@ -116,18 +119,25 @@ def translation_percent(translated, total):
 
 
 def add_configuration_error(name, message):
-    """Log configuration error."""
+    """Log configuration error.
+
+    Uses cache in case database is not yet ready."""
+    if apps.models_ready:
+        from weblate.wladmin.models import ConfigurationError
+        try:
+            ConfigurationError.objects.add(name, message)
+            return
+        except OperationalError:
+            # The table does not have to be created yet (eg. migration
+            # is about to be executed)
+            pass
     errors = cache.get('configuration-errors', [])
     errors.append({
         'name': name,
         'message': message,
+        'timestamp': timezone.now(),
     })
     cache.set('configuration-errors', errors)
-
-
-def get_configuration_errors():
-    """Return all configuration errors."""
-    return cache.get('configuration-errors', [])
 
 
 def get_clean_env(extra=None):
@@ -138,7 +148,7 @@ def get_clean_env(extra=None):
     }
     if extra is not None:
         environ.update(extra)
-    variables = ('PATH', 'LD_LIBRARY_PATH')
+    variables = ('PATH', 'LD_LIBRARY_PATH', 'SystemRoot')
     for var in variables:
         if var in os.environ:
             environ[var] = os.environ[var]
@@ -222,12 +232,11 @@ def sort_unicode(choices, key):
             choices,
             key=lambda tup: remove_accents(key(tup)).lower()
         )
-    else:
-        collator = pyuca.Collator()
-        return sorted(
-            choices,
-            key=lambda tup: collator.sort_key(force_text(key(tup)))
-        )
+    collator = pyuca.Collator()
+    return sorted(
+        choices,
+        key=lambda tup: collator.sort_key(force_text(key(tup)))
+    )
 
 
 def remove_accents(input_str):

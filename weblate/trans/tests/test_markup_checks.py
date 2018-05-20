@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -73,6 +73,12 @@ class XMLValidityCheckTest(CheckTestCase):
         self.do_test(
             True,
             ('<emphasis>2nd</emphasis>', '<emphasis>not< /emphasis>', '')
+        )
+
+    def test_html(self):
+        self.do_test(
+            False,
+            ('This is<br>valid HTML', 'Toto je<br>platne HTML', '')
         )
 
 

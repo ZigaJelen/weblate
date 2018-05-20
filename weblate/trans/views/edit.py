@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -22,39 +22,40 @@ from __future__ import unicode_literals
 
 import time
 
+from django.contrib.messages import get_messages
 from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.http import require_POST
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext as _, ungettext
 from django.utils.encoding import force_text
-from django.http import HttpResponseRedirect, HttpResponse
+from django.http import HttpResponseRedirect, HttpResponse, JsonResponse
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
+from django.template.loader import render_to_string
 
 from weblate import get_doc_url
 from weblate.utils import messages
+from weblate.utils.antispam import is_spam
 from weblate.permissions.helpers import check_access
-from weblate.trans.models import (
-    Unit, Change, Comment, Suggestion, Dictionary,
-    get_related_units,
-)
+from weblate.trans.models import Unit, Change, Comment, Suggestion, Dictionary
 from weblate.trans.autofixes import fix_target
 from weblate.trans.forms import (
-    TranslationForm, SearchForm, InlineWordForm,
-    MergeForm, AutoForm, AntispamForm, CommentForm, RevertForm,
+    TranslationForm, ZenTranslationForm, SearchForm, InlineWordForm,
+    MergeForm, AutoForm, AntispamForm, CommentForm, RevertForm, NewUnitForm,
 )
 from weblate.trans.views.helper import (
     get_translation, import_message, show_form_errors,
 )
 from weblate.trans.checks import CHECKS
 from weblate.trans.util import join_plural, render, redirect_next
-from weblate.trans.autotranslate import auto_translate
+from weblate.trans.autotranslate import AutoTranslate
 from weblate.permissions.helpers import (
     can_translate, can_suggest, can_accept_suggestion, can_delete_suggestion,
     can_vote_suggestion, can_delete_comment, can_automatic_translation,
-    can_add_comment,
+    can_add_comment, can_add_unit,
 )
+from weblate.utils.hash import hash_to_checksum
 
 
 def get_other_units(unit):
@@ -73,7 +74,6 @@ def get_other_units(unit):
             unit.translation.subproject.project,
         'translation__language':
             unit.translation.language,
-        'translated': True,
     }
 
     same = Unit.objects.same(unit, False)
@@ -148,8 +148,6 @@ def search(translation, request):
         form.cleaned_data,
         translation=translation,
     )
-    if form.cleaned_data['type'] == 'random':
-        allunits = allunits[:25]
 
     search_query = form.get_search_query()
     name = form.get_name()
@@ -158,7 +156,7 @@ def search(translation, request):
     unit_ids = list(allunits.values_list('id', flat=True))
 
     # Check empty search results
-    if len(unit_ids) == 0:
+    if not unit_ids:
         messages.warning(request, _('No string matched your search!'))
         return redirect(translation)
 
@@ -193,6 +191,15 @@ def perform_suggestion(unit, form, request):
         )
         # Stay on same entry
         return False
+    elif not request.user.is_authenticated:
+        # Spam check
+        if is_spam('\n'.join(form.cleaned_data['target']), request):
+            messages.error(
+                request,
+                _('Your suggestion has been identified as spam!')
+            )
+            return False
+
     # Invite user to become translator if there is nobody else
     # and the project is accepting translations
     translation = unit.translation
@@ -223,7 +230,7 @@ def perform_suggestion(unit, form, request):
         unit,
         join_plural(form.cleaned_data['target']),
         request,
-        can_vote_suggestion(request.user, unit.translation)
+        can_vote_suggestion(request.user, unit)
     )
     if not result:
         messages.error(request, _('Your suggestion already exists!'))
@@ -238,7 +245,7 @@ def perform_translation(unit, form, request):
     )
 
     # Run AutoFixes on user input
-    if not unit.translation.is_template():
+    if not unit.translation.is_template:
         new_target, fixups = fix_target(form.cleaned_data['target'], unit)
     else:
         new_target = form.cleaned_data['target']
@@ -248,11 +255,11 @@ def perform_translation(unit, form, request):
     saved = unit.translate(
         request,
         new_target,
-        form.cleaned_data['fuzzy']
+        form.cleaned_data['state']
     )
 
     # Warn about applied fixups
-    if len(fixups) > 0:
+    if fixups:
         messages.info(
             request,
             _('Following fixups were applied to translation: %s') %
@@ -283,8 +290,7 @@ def perform_translation(unit, form, request):
     return True
 
 
-def handle_translate(translation, request, user_locked,
-                     this_unit_url, next_unit_url):
+def handle_translate(translation, request, this_unit_url, next_unit_url):
     """Save translation or suggestion to database and backend."""
     # Antispam protection
     antispam = AntispamForm(request.POST)
@@ -292,32 +298,29 @@ def handle_translate(translation, request, user_locked,
         # Silently redirect to next entry
         return HttpResponseRedirect(next_unit_url)
 
-    # Check whether translation is not outdated
-    translation.check_sync()
-
     form = TranslationForm(
-        request.user.profile, translation, None, request.POST
+        request.user, translation, None, request.POST
     )
     if not form.is_valid():
         show_form_errors(request, form)
-        return
+        return None
 
     unit = form.cleaned_data['unit']
     go_next = True
 
     if 'suggest' in request.POST:
         go_next = perform_suggestion(unit, form, request)
-    elif not can_translate(request.user, unit.translation):
+    elif not can_translate(request.user, unit):
         messages.error(
             request,
-            _('You don\'t have privileges to save translations!')
+            _('Insufficient privileges for saving translations.')
         )
-    elif not user_locked:
+    else:
         # Custom commit message
         message = request.POST.get('commit_message')
         if message is not None and message != unit.translation.commit_message:
             # Commit pending changes so that they don't get new message
-            unit.translation.commit_pending(request, request.user)
+            unit.translation.commit_pending(request)
             # Store new commit message
             unit.translation.commit_message = message
             unit.translation.save()
@@ -327,31 +330,28 @@ def handle_translate(translation, request, user_locked,
     # Redirect to next entry
     if go_next:
         return HttpResponseRedirect(next_unit_url)
-    else:
-        return HttpResponseRedirect(this_unit_url)
+    return HttpResponseRedirect(this_unit_url)
 
 
 def handle_merge(translation, request, next_unit_url):
     """Handle unit merging."""
-    if not can_translate(request.user, translation):
-        messages.error(
-            request,
-            _('You don\'t have privileges to save translations!')
-        )
-        return
-
     mergeform = MergeForm(translation, request.GET)
     if not mergeform.is_valid():
         messages.error(request, _('Invalid merge request!'))
-        return
+        return None
 
     unit = mergeform.cleaned_data['unit']
     merged = mergeform.cleaned_data['merge_unit']
 
+    if not can_translate(request.user, unit):
+        messages.error(
+            request,
+            _('Insufficient privileges for saving translations.')
+        )
+        return None
+
     # Store unit
-    unit.target = merged.target
-    unit.fuzzy = merged.fuzzy
-    saved = unit.save_backend(request)
+    saved = unit.translate(request, merged.target, merged.state)
     # Update stats if there was change
     if saved:
         request.user.profile.translated += 1
@@ -361,35 +361,37 @@ def handle_merge(translation, request, next_unit_url):
 
 
 def handle_revert(translation, request, next_unit_url):
-    if not can_translate(request.user, translation):
-        messages.error(
-            request,
-            _('You don\'t have privileges to save translations!')
-        )
-        return
-
     revertform = RevertForm(translation, request.GET)
     if not revertform.is_valid():
         messages.error(request, _('Invalid revert request!'))
-        return
+        return None
 
     unit = revertform.cleaned_data['unit']
     change = revertform.cleaned_data['revert_change']
 
+    if not can_translate(request.user, unit):
+        messages.error(
+            request,
+            _('Insufficient privileges for saving translations.')
+        )
+        return None
+
     if change.target == "":
         messages.error(request, _('Can not revert to empty translation!'))
-    else:
-        # Store unit
-        unit.target = change.target
-        unit.save_backend(request, change_action=Change.ACTION_REVERT)
-        # Redirect to next entry
-        return HttpResponseRedirect(next_unit_url)
+        return None
+    # Store unit
+    unit.translate(
+        request, change.target, unit.state,
+        change_action=Change.ACTION_REVERT
+    )
+    # Redirect to next entry
+    return HttpResponseRedirect(next_unit_url)
 
 
 def check_suggest_permissions(request, mode, translation, suggestion):
     """Check permission for suggestion handling."""
     if mode in ('accept', 'accept_edit'):
-        if not can_accept_suggestion(request.user, translation):
+        if not can_accept_suggestion(request.user, translation=translation):
             messages.error(
                 request,
                 _('You do not have privilege to accept suggestions!')
@@ -403,7 +405,7 @@ def check_suggest_permissions(request, mode, translation, suggestion):
             )
             return False
     elif mode in ('upvote', 'downvote'):
-        if not can_vote_suggestion(request.user, translation):
+        if not can_vote_suggestion(request.user, translation=translation):
             messages.error(
                 request,
                 _('You do not have privilege to vote for suggestions!')
@@ -447,9 +449,10 @@ def handle_suggestions(translation, request, this_unit_url, next_unit_url):
         if 'accept' in request.POST:
             redirect_url = next_unit_url
     elif 'delete' in request.POST:
-        suggestion.delete_log(translation, request)
+        suggestion.delete_log(request.user)
     elif 'upvote' in request.POST:
         suggestion.add_vote(translation, request, True)
+        redirect_url = next_unit_url
     elif 'downvote' in request.POST:
         suggestion.add_vote(translation, request, False)
 
@@ -461,9 +464,7 @@ def translate(request, project, subproject, lang):
     translation = get_translation(request, project, subproject, lang)
 
     # Check locks
-    user_locked = translation.is_user_locked(request.user)
-    project_locked = translation.subproject.locked
-    locked = project_locked or user_locked
+    locked = translation.subproject.locked
 
     # Search results
     search_result = search(translation, request)
@@ -489,7 +490,7 @@ def translate(request, project, subproject, lang):
 
     # Check boundaries
     if not 0 <= offset < num_results:
-        messages.info(request, _('You have reached end of translating.'))
+        messages.info(request, _('The translation has come to an end.'))
         # Delete search
         del request.session[search_result['key']]
         # Redirect to translation
@@ -508,19 +509,21 @@ def translate(request, project, subproject, lang):
     # Any form submitted?
     if 'skip' in request.POST:
         return redirect(next_unit_url)
-    elif request.method == 'POST' and not project_locked:
+    elif (request.method == 'POST' and
+          (not locked or 'delete' in request.POST)):
 
-        # Handle accepting/deleting suggestions
         if ('accept' not in request.POST and
                 'accept_edit' not in request.POST and
                 'delete' not in request.POST and
                 'upvote' not in request.POST and
                 'downvote' not in request.POST):
+            # Handle translation
             response = handle_translate(
-                translation, request, user_locked,
+                translation, request,
                 this_unit_url, next_unit_url
             )
-        elif not locked:
+        elif not locked or 'delete' in request.POST:
+            # Handle accepting/deleting suggestions
             response = handle_suggestions(
                 translation, request, this_unit_url, next_unit_url,
             )
@@ -559,7 +562,7 @@ def translate(request, project, subproject, lang):
     antispam = AntispamForm()
 
     # Prepare form
-    form = TranslationForm(request.user.profile, translation, unit)
+    form = TranslationForm(request.user, translation, unit)
 
     return render(
         request,
@@ -585,11 +588,8 @@ def translate(request, project, subproject, lang):
             'antispam': antispam,
             'comment_form': CommentForm(),
             'search_form': search_result['form'].reset_offset(),
-            'update_lock': translation.lock_user == request.user,
             'secondary': secondary,
             'locked': locked,
-            'user_locked': user_locked,
-            'project_locked': project_locked,
             'glossary': Dictionary.objects.get_words(unit),
             'addword_form': InlineWordForm(),
         }
@@ -608,23 +608,33 @@ def auto_translation(request, project, subproject, lang):
 
     if translation.subproject.locked or not autoform.is_valid():
         messages.error(request, _('Failed to process form!'))
+        show_form_errors(request, autoform)
         return redirect(translation)
 
-    updated = auto_translate(
+    auto = AutoTranslate(
         request.user,
         translation,
-        autoform.cleaned_data['subproject'],
-        autoform.cleaned_data['inconsistent'],
-        autoform.cleaned_data['overwrite']
+        autoform.cleaned_data['type'],
+        request=request
     )
 
+    if autoform.cleaned_data['auto_source'] == 'mt':
+        auto.process_mt(
+            autoform.cleaned_data['engines'],
+            autoform.cleaned_data['threshold'],
+        )
+    else:
+        auto.process_others(
+            autoform.cleaned_data['subproject'],
+        )
+
     import_message(
-        request, updated,
+        request, auto.updated,
         _('Automatic translation completed, no strings were updated.'),
         ungettext(
             'Automatic translation completed, %d string was updated.',
             'Automatic translation completed, %d strings were updated.',
-            updated
+            auto.updated
         )
     )
 
@@ -670,7 +680,7 @@ def delete_comment(request, pk):
     if not can_delete_comment(request.user, comment_obj):
         raise PermissionDenied()
 
-    units = get_related_units(comment_obj)
+    units = comment_obj.related_units
     if units.exists():
         fallback_url = units[0].get_absolute_url()
     else:
@@ -707,8 +717,8 @@ def get_zen_unitdata(translation, request):
                 request.user.profile.secondary_in_zen
                 else None
             ),
-            'form': TranslationForm(
-                request.user.profile,
+            'form': ZenTranslationForm(
+                request.user,
                 translation,
                 unit,
                 tabindex=100 + (unit.position * 10),
@@ -744,7 +754,6 @@ def zen(request, project, subproject, lang):
             'search_url': search_result['url'],
             'offset': search_result['offset'],
             'search_form': search_result['form'].reset_offset(),
-            'update_lock': translation.lock_user == request.user,
         }
     )
 
@@ -775,26 +784,73 @@ def load_zen(request, project, subproject, lang):
 @require_POST
 def save_zen(request, project, subproject, lang):
     """Save handler for zen mode."""
+    def render_mesage(message):
+        return render_to_string(
+            'message.html',
+            {'tags': message.tags, 'message': message.message}
+        )
+
     translation = get_translation(request, project, subproject, lang)
-    user_locked = translation.is_user_locked(request.user)
 
     form = TranslationForm(
-        request.user.profile, translation, None, request.POST
+        request.user, translation, None, request.POST
     )
-    if not can_translate(request.user, translation):
+    translationsum = ''
+    if not form.is_valid():
+        show_form_errors(request, form)
+    elif not can_translate(request.user, form.cleaned_data['unit']):
         messages.error(
-            request,
-            _('You don\'t have privileges to save translations!')
+            request, _('Insufficient privileges for saving translations.')
         )
-    elif not form.is_valid():
-        messages.error(request, _('Failed to save translation!'))
-    elif not user_locked:
+    else:
         unit = form.cleaned_data['unit']
 
         perform_translation(unit, form, request)
 
-    return render(
-        request,
-        'zen-response.html',
-        {},
-    )
+        translationsum = hash_to_checksum(unit.get_target_hash())
+
+    response = {
+        'messages': '',
+        'state': 'success',
+        'translationsum': translationsum,
+    }
+
+    storage = get_messages(request)
+    if storage:
+        response['messages'] = '\n'.join([render_mesage(m) for m in storage])
+        tags = set([m.tags for m in storage])
+        if 'error' in tags:
+            response['state'] = 'danger'
+        elif 'warning' in tags:
+            response['state'] = 'warning'
+        elif 'info' in tags:
+            response['state'] = 'info'
+
+    return JsonResponse(data=response)
+
+
+@require_POST
+@login_required
+def new_unit(request, project, subproject, lang):
+    translation = get_translation(request, project, subproject, lang)
+    if not can_add_unit(request.user, translation):
+        raise PermissionDenied()
+
+    form = NewUnitForm(request.user, request.POST)
+    if not form.is_valid():
+        show_form_errors(request, form)
+    else:
+        key = form.cleaned_data['key']
+        value = form.cleaned_data['value'][0]
+
+        if translation.unit_set.filter(context=key).exists():
+            messages.error(
+                request, _('Translation with this key seem to already exist!')
+            )
+        else:
+            translation.new_unit(request, key, value)
+            messages.success(
+                request, _('New string has been added.')
+            )
+
+    return redirect(translation)

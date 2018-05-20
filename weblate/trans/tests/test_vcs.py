@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -31,7 +31,9 @@ from weblate.trans.tests.utils import RepoTestMixin
 from weblate.trans.vcs import GitRepository, HgRepository, \
     RepositoryException, GitWithGerritRepository, GithubRepository, \
     SubversionRepository
-from weblate.trans.tests.utils import get_test_file
+from weblate.trans.tests.utils import (
+    get_test_file, remove_readonly, TempDirMixin,
+)
 
 
 class GithubFakeRepository(GithubRepository):
@@ -81,8 +83,7 @@ class RepositoryTest(TestCase):
         self.assertTrue(GitTestRepository.is_supported())
 
 
-class VCSGitTest(TestCase, RepoTestMixin):
-    _tempdir = None
+class VCSGitTest(TestCase, RepoTestMixin, TempDirMixin):
     _class = GitRepository
     _vcs = 'git'
     _can_push = True
@@ -95,24 +96,26 @@ class VCSGitTest(TestCase, RepoTestMixin):
 
         self.clone_test_repos()
 
-        self._tempdir = tempfile.mkdtemp()
-        self.repo = self.clone_repo(self._tempdir)
+        self.create_temp()
+        self.repo = self.clone_repo(self.tempdir)
 
     def clone_repo(self, path):
         return self._class.clone(
-            'file://' + getattr(self, '{0}_repo_path'.format(self._vcs)),
+            self.format_local_path(
+                getattr(self, '{0}_repo_path'.format(self._vcs))
+            ),
             path,
         )
 
     def tearDown(self):
-        if self._tempdir is not None:
-            shutil.rmtree(self._tempdir)
+        self.remove_temp()
 
     def add_remote_commit(self, conflict=False):
         tempdir = tempfile.mkdtemp()
         try:
             repo = self.clone_repo(tempdir)
-            repo.set_committer('Second Bar', 'second@example.net')
+            with repo.lock:
+                repo.set_committer('Second Bar', 'second@example.net')
             if conflict:
                 filename = 'testfile'
             else:
@@ -133,12 +136,15 @@ class VCSGitTest(TestCase, RepoTestMixin):
                 # Push it
                 repo.push()
         finally:
-            shutil.rmtree(tempdir)
+            shutil.rmtree(tempdir, onerror=remove_readonly)
 
     def test_clone(self):
-        self.assertTrue(os.path.exists(
-            os.path.join(self._tempdir, '.{0}'.format(self._vcs))
-        ))
+        # Verify that VCS directory exists
+        if self._vcs == 'mercurial':
+            dirname = '.hg'
+        else:
+            dirname = '.{}'.format(self._vcs)
+        self.assertTrue(os.path.exists(os.path.join(self.tempdir, dirname)))
 
     def test_revision(self):
         self.assertEqual(
@@ -223,13 +229,14 @@ class VCSGitTest(TestCase, RepoTestMixin):
 
     def test_status(self):
         status = self.repo.status()
+        # Older git print up-to-date, newer up to date
         self.assertIn(
-            "Your branch is up-to-date with 'origin/master'.", status
+            "date with 'origin/master'.", status
         )
 
     def test_needs_commit(self):
         self.assertFalse(self.repo.needs_commit())
-        with open(os.path.join(self._tempdir, 'README.md'), 'a') as handle:
+        with open(os.path.join(self.tempdir, 'README.md'), 'a') as handle:
             handle.write('CHANGE')
         self.assertTrue(self.repo.needs_commit())
         self.assertTrue(self.repo.needs_commit('README.md'))
@@ -271,7 +278,8 @@ class VCSGitTest(TestCase, RepoTestMixin):
         self.assertNotEqual(self._class.get_version(), '')
 
     def test_set_committer(self):
-        self.repo.set_committer('Foo Bar Žač', 'foo@example.net')
+        with self.repo.lock:
+            self.repo.set_committer('Foo Bar Žač', 'foo@example.net')
         self.assertEqual(
             self.repo.get_config('user.name'), 'Foo Bar Žač'
         )
@@ -280,10 +288,11 @@ class VCSGitTest(TestCase, RepoTestMixin):
         )
 
     def test_commit(self):
-        self.repo.set_committer('Foo Bar', 'foo@example.net')
+        with self.repo.lock:
+            self.repo.set_committer('Foo Bar', 'foo@example.net')
         # Create test file
-        with open(os.path.join(self._tempdir, 'testfile'), 'w') as handle:
-            handle.write('TEST FILE\n')
+        with open(os.path.join(self.tempdir, 'testfile'), 'wb') as handle:
+            handle.write(b'TEST FILE\n')
 
         oldrev = self.repo.last_revision
         # Commit it
@@ -321,14 +330,15 @@ class VCSGitTest(TestCase, RepoTestMixin):
             )
 
     def test_remove(self):
-        self.repo.set_committer('Foo Bar', 'foo@example.net')
+        with self.repo.lock:
+            self.repo.set_committer('Foo Bar', 'foo@example.net')
         self.assertTrue(
-            os.path.exists(os.path.join(self._tempdir, 'po/cs.po'))
+            os.path.exists(os.path.join(self.tempdir, 'po/cs.po'))
         )
         with self.repo.lock:
             self.repo.remove(['po/cs.po'], 'Remove Czech translation')
         self.assertFalse(
-            os.path.exists(os.path.join(self._tempdir, 'po/cs.po'))
+            os.path.exists(os.path.join(self.tempdir, 'po/cs.po'))
         )
 
     def test_object_hash(self):
@@ -383,6 +393,12 @@ class VCSGitTest(TestCase, RepoTestMixin):
                 'branch'
             )
 
+    def test_get_file(self):
+        self.assertIn(
+            'msgid',
+            self.repo.get_file('po/cs.po', self.repo.last_revision)
+        )
+
 
 class VCSGerritTest(VCSGitTest):
     _class = GitWithGerritRepository
@@ -398,11 +414,11 @@ class VCSGithubTest(VCSGitTest):
 
 class VCSSubversionTest(VCSGitTest):
     _class = SubversionRepository
-    _vcs = 'svn'
+    _vcs = 'subversion'
 
     def test_clone(self):
         self.assertTrue(os.path.exists(
-            os.path.join(self._tempdir, '.git', 'svn')
+            os.path.join(self.tempdir, '.git', 'svn')
         ))
 
     def test_revision_info(self):
@@ -415,18 +431,34 @@ class VCSSubversionTest(VCSGitTest):
         self.assertIn('nothing to commit', status)
 
     def test_configure_remote(self):
-        self.repo.configure_remote('pullurl', 'pushurl', 'branch')
+        with self.repo.lock:
+            with self.assertRaises(RepositoryException):
+                self.repo.configure_remote('pullurl', 'pushurl', 'branch')
         self.verify_pull_url()
 
     def test_configure_remote_no_push(self):
-        self.repo.configure_remote('pullurl', '', 'branch')
+        with self.repo.lock:
+            self.repo.configure_remote(
+                self.format_local_path(self.subversion_repo_path),
+                self.format_local_path(self.subversion_repo_path),
+                'master'
+            )
+            with self.assertRaises(RepositoryException):
+                self.repo.configure_remote('pullurl', '', 'branch')
         self.verify_pull_url()
 
     def verify_pull_url(self):
         self.assertEqual(
             self.repo.get_config('svn-remote.svn.url'),
-            'pullurl',
+            self.format_local_path(self.subversion_repo_path),
         )
+
+
+class VCSSubversionBranchTest(VCSSubversionTest):
+    """Cloning subversion branch directly."""
+    def clone_test_repos(self):
+        super(VCSSubversionBranchTest, self).clone_test_repos()
+        self.subversion_repo_path += '/trunk'
 
 
 class VCSHgTest(VCSGitTest):
@@ -434,10 +466,11 @@ class VCSHgTest(VCSGitTest):
     Mercurial repository testing.
     """
     _class = HgRepository
-    _vcs = 'hg'
+    _vcs = 'mercurial'
 
     def test_configure_remote(self):
-        self.repo.configure_remote('/pullurl', '/pushurl', 'branch')
+        with self.repo.lock:
+            self.repo.configure_remote('/pullurl', '/pushurl', 'branch')
         self.assertEqual(
             self.repo.get_config('paths.default'),
             '/pullurl',
@@ -448,12 +481,14 @@ class VCSHgTest(VCSGitTest):
         )
 
     def test_configure_remote_no_push(self):
-        self.repo.configure_remote('/pullurl', '', 'branch')
+        with self.repo.lock:
+            self.repo.configure_remote('/pullurl', '', 'branch')
         self.assertEqual(
             self.repo.get_config('paths.default-push'),
             '',
         )
-        self.repo.configure_remote('/pullurl', '/push', 'branch')
+        with self.repo.lock:
+            self.repo.configure_remote('/pullurl', '/push', 'branch')
         self.assertEqual(
             self.repo.get_config('paths.default-push'),
             '/push',
@@ -465,7 +500,8 @@ class VCSHgTest(VCSGitTest):
         self.check_valid_info(info)
 
     def test_set_committer(self):
-        self.repo.set_committer('Foo Bar Žač', 'foo@example.net')
+        with self.repo.lock:
+            self.repo.set_committer('Foo Bar Žač', 'foo@example.net')
         self.assertEqual(
             self.repo.get_config('ui.username'),
             'Foo Bar Žač <foo@example.net>'

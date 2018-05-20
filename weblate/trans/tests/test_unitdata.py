@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -47,7 +47,7 @@ class UnitdataTestCase(TestCase):
         check = self.create_check('same')
         self.assertEqual(
             force_text(check.get_description()),
-            'Source and translated strings are same'
+            'Source and translation are identical'
         )
         self.assertEqual(check.get_severity(), 'warning')
         self.assertTrue(

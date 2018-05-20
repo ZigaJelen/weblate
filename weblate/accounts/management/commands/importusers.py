@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -48,6 +48,7 @@ class Command(BaseCommand):
         """
 
         data = json.load(options['json-file'])
+        options['json-file'].close()
 
         for line in data:
             if 'fields' in line:

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -25,13 +25,15 @@ from datetime import date, datetime, timedelta
 import json
 
 from crispy_forms.helper import FormHelper
-from crispy_forms.layout import Layout, Fieldset
+from crispy_forms.layout import Layout, Fieldset, Field, Div
+from crispy_forms.bootstrap import TabHolder, Tab, InlineRadios
 
 from django import forms
 from django.core.exceptions import PermissionDenied
 from django.utils.translation import (
     ugettext_lazy as _, ugettext, pgettext_lazy, pgettext
 )
+from django.urls import reverse
 from django.forms.utils import from_current_timezone
 from django.utils import timezone
 from django.utils.safestring import mark_safe
@@ -44,17 +46,25 @@ from django.contrib.auth.models import User
 
 from weblate.lang.data import LOCALE_ALIASES
 from weblate.lang.models import Language
-from weblate.trans.models import SubProject, Unit, Project, Change
+from weblate.trans.filter import get_filter_choice
+from weblate.trans.models import (
+    Translation, SubProject, Unit, Project, Change
+)
 from weblate.trans.models.source import PRIORITY_CHOICES
-from weblate.trans.checks import CHECKS
+from weblate.trans.machine import MACHINE_TRANSLATION_SERVICES
 from weblate.permissions.helpers import (
     can_author_translation, can_overwrite_translation, can_translate,
-    can_suggest, can_add_translation, can_mass_add_translation,
+    can_suggest, can_add_translation, can_mass_add_translation, can_review,
+    can_review_project,
 )
 from weblate.trans.specialchars import get_special_chars, RTL_CHARS_DATA
 from weblate.trans.validators import validate_check_flags
 from weblate.trans.util import sort_choices
-from weblate.utils.hash import checksum_to_hash
+from weblate.utils.hash import checksum_to_hash, hash_to_checksum
+from weblate.utils.state import (
+    STATE_TRANSLATED, STATE_FUZZY, STATE_APPROVED, STATE_EMPTY,
+    STATE_CHOICES
+)
 from weblate.utils.validators import validate_file_extension
 from weblate.logger import LOGGER
 from weblate import get_doc_url
@@ -84,12 +94,12 @@ EDITOR_TEMPLATE = '''
 </div>
 '''
 PLURALS_TEMPLATE = '''
-<p class="help-block pull-right flip">
+<p class="help-block">
+{2}
 <a href="{0}" title="{1}">
 <i class="fa fa-question-circle" aria-hidden="true"></i>
 </a>
 </p>
-<p class="help-block">{2}</p>
 '''
 COPY_TEMPLATE = '''
 data-loading-text="{0}" data-checksum="{1}" data-content="{2}"
@@ -97,17 +107,18 @@ data-loading-text="{0}" data-checksum="{1}" data-content="{2}"
 
 
 class WeblateDateField(forms.DateField):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, datepicker=True, **kwargs):
         if 'widget' not in kwargs:
+            attrs = {
+                'type': 'date',
+            }
+            if datepicker:
+                attrs['data-provide'] = 'datepicker'
+                attrs['data-date-format'] = 'yyyy-mm-dd'
             kwargs['widget'] = forms.DateInput(
-                attrs={
-                    'type': 'date',
-                    'data-provide': 'datepicker',
-                    'data-date-format': 'yyyy-mm-dd',
-                },
-                format='%Y-%m-%d'
+                attrs=attrs, format='%Y-%m-%d'
             )
-        super(WeblateDateField, self).__init__(*args, **kwargs)
+        super(WeblateDateField, self).__init__(**kwargs)
 
     def to_python(self, value):
         """Produce timezone aware datetime with 00:00:00 as time"""
@@ -135,7 +146,7 @@ class ChecksumField(forms.CharField):
     def clean(self, value):
         super(ChecksumField, self).clean(value)
         if not value:
-            return
+            return None
         try:
             return checksum_to_hash(value)
         except ValueError:
@@ -145,13 +156,13 @@ class ChecksumField(forms.CharField):
 class UserField(forms.CharField):
     def clean(self, value):
         if not value:
-            return
+            return None
         try:
             return User.objects.get(Q(username=value) | Q(email=value))
         except User.DoesNotExist:
-            raise ValidationError(_('No matching user found!'))
+            raise ValidationError(_('No matching user found.'))
         except User.MultipleObjectsReturned:
-            raise ValidationError(_('More users matched!'))
+            raise ValidationError(_('More users matched.'))
 
 
 class PluralTextarea(forms.Textarea):
@@ -263,11 +274,12 @@ class PluralTextarea(forms.Textarea):
 
         return result
 
-    def render(self, name, value, attrs=None, **kwargs):
+    def render(self, name, value, attrs=None, renderer=None, **kwargs):
         """Render all textareas with correct plural labels."""
         unit = value
         values = unit.get_target_plurals()
         lang = unit.translation.language
+        plural = unit.translation.plural
         tabindex = self.attrs['tabindex']
 
         # Need to add extra class
@@ -293,16 +305,17 @@ class PluralTextarea(forms.Textarea):
                 fieldname,
                 val,
                 attrs,
+                renderer,
                 **kwargs
             )
             # Label for plural
             if len(values) == 1:
-                if unit.translation.is_template():
+                if unit.translation.is_template:
                     label = ugettext('Source')
                 else:
                     label = ugettext('Translation')
             else:
-                label = lang.get_plural_label(idx)
+                label = plural.get_plural_label(idx)
             ret.append(
                 EDITOR_TEMPLATE.format(
                     self.get_toolbar(lang, fieldid, unit, idx),
@@ -324,7 +337,7 @@ class PluralTextarea(forms.Textarea):
                             'will be used based on given count (n).'
                         ),
                         ugettext('Plural equation'),
-                        lang.pluralequation
+                        plural.equation
                     )
                 )
             )
@@ -350,10 +363,9 @@ class PluralField(forms.CharField):
     The only difference from CharField is that it does not force value to
     be string.
     """
-    def __init__(self, max_length=None, min_length=None, *args, **kwargs):
+    def __init__(self, max_length=None, min_length=None, **kwargs):
         kwargs['label'] = ''
         super(PluralField, self).__init__(
-            *args,
             widget=PluralTextarea,
             **kwargs
         )
@@ -364,7 +376,7 @@ class PluralField(forms.CharField):
 
     def clean(self, value):
         value = super(PluralField, self).clean(value)
-        if len(value) == 0:
+        if not value:
             raise ValidationError(
                 _('Missing translated string!')
             )
@@ -372,7 +384,7 @@ class PluralField(forms.CharField):
 
 
 class ChecksumForm(forms.Form):
-    """Form for handling checksum ids for translation."""
+    """Form for handling checksum IDs for translation."""
     checksum = ChecksumField(required=True)
 
     def __init__(self, translation, *args, **kwargs):
@@ -392,55 +404,129 @@ class ChecksumForm(forms.Form):
             )[0]
         except (Unit.DoesNotExist, IndexError):
             LOGGER.error(
-                'message %s disappeared!',
-                self.cleaned_data['checksum']
+                'string %s disappeared!', self.cleaned_data['checksum']
             )
-            raise ValidationError(
-                _('Message you wanted to translate is no longer available!')
-            )
+            raise ValidationError(_(
+                'The string you wanted to translate is no longer available!'
+            ))
+
+
+class FuzzyField(forms.BooleanField):
+    help_as_icon = True
+
+    def __init__(self, *args, **kwargs):
+        kwargs['label'] = _('Needs editing')
+        kwargs['help_text'] = _(
+            'Strings are usually marked as \"Needs editing\" after the source '
+            'string is updated, or when marked as such manually.'
+        )
+        super(FuzzyField, self).__init__(*args, **kwargs)
+        self.widget.attrs['class'] = 'fuzzy_checkbox'
 
 
 class TranslationForm(ChecksumForm):
     """Form used for translation of single string."""
-    target = PluralField(
+    contentsum = ChecksumField(required=True)
+    translationsum = ChecksumField(required=True)
+    target = PluralField(required=False)
+    fuzzy = FuzzyField(required=False)
+    review = forms.ChoiceField(
+        label=_('Review state'),
+        choices=[
+            (STATE_FUZZY, _('Needs editing')),
+            (STATE_TRANSLATED, _('Waiting for review')),
+            (STATE_APPROVED, _('Approved')),
+        ],
         required=False,
-    )
-    fuzzy = forms.BooleanField(
-        label=pgettext_lazy(
-            'Checkbox for marking translation needing review',
-            'Needs review'
-        ),
-        required=False
+        widget=forms.RadioSelect
     )
 
-    def __init__(self, profile, translation, unit,
-                 *args, **kwargs):
+    def __init__(self, user, translation, unit, *args, **kwargs):
         if unit is not None:
             kwargs['initial'] = {
                 'checksum': unit.checksum,
+                'contentsum': hash_to_checksum(unit.content_hash),
+                'translationsum': hash_to_checksum(unit.get_target_hash()),
                 'target': unit,
                 'fuzzy': unit.fuzzy,
+                'review': unit.state,
             }
             kwargs['auto_id'] = 'id_{0}_%s'.format(unit.checksum)
         tabindex = kwargs.pop('tabindex', 100)
         super(TranslationForm, self).__init__(
             translation, *args, **kwargs
         )
-        self.fields['fuzzy'].widget.attrs['class'] = 'fuzzy_checkbox'
+        self.user = user
         self.fields['target'].widget.attrs['tabindex'] = tabindex
-        self.fields['target'].widget.profile = profile
+        self.fields['target'].widget.profile = user.profile
+        self.fields['review'].widget.attrs['class'] = 'review_radio'
+        # Avoid failing validation on not translated string
+        if args:
+            self.fields['review'].choices.append((STATE_EMPTY, ''))
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.layout = Layout(
+            Field('checksum'),
+            Field('target'),
+            Field('fuzzy'),
+            Field('contentsum'),
+            Field('translationsum'),
+            InlineRadios('review'),
+        )
+        if unit and can_review(user, unit.translation):
+            self.fields['fuzzy'].widget = forms.HiddenInput()
+        else:
+            self.fields['review'].widget = forms.HiddenInput()
 
     def clean(self):
         super(TranslationForm, self).clean()
-        if ('unit' not in self.cleaned_data or
-                'target' not in self.cleaned_data):
+
+        # Check required fields
+        required = set(('unit', 'target', 'contentsum', 'translationsum'))
+        if not required.issubset(self.cleaned_data):
             return
-        max_length = self.cleaned_data['unit'].get_max_length()
+
+        unit = self.cleaned_data['unit']
+
+        if self.cleaned_data['contentsum'] != unit.content_hash:
+            raise ValidationError(
+                _(
+                    'Source string has been changed meanwhile. '
+                    'Please check your changes.'
+                )
+            )
+
+        if self.cleaned_data['translationsum'] != unit.get_target_hash():
+            raise ValidationError(
+                _(
+                    'Translation of the string has been changed meanwhile. '
+                    'Please check your changes.'
+                )
+            )
+
+        max_length = unit.get_max_length()
         for text in self.cleaned_data['target']:
             if len(text) > max_length:
                 raise ValidationError(
                     _('Translation text too long!')
                 )
+        if (can_review(self.user, unit.translation)
+                and self.cleaned_data.get('review')):
+            self.cleaned_data['state'] = int(self.cleaned_data['review'])
+        elif self.cleaned_data['fuzzy']:
+            self.cleaned_data['state'] = STATE_FUZZY
+        else:
+            self.cleaned_data['state'] = STATE_TRANSLATED
+
+
+class ZenTranslationForm(TranslationForm):
+    def __init__(self, user, translation, unit, *args, **kwargs):
+        super(ZenTranslationForm, self).__init__(
+            user, translation, unit, *args, **kwargs
+        )
+        self.helper.form_action = reverse(
+            'save_zen', kwargs=translation.get_reverse_url_kwargs()
+        )
 
 
 class AntispamForm(forms.Form):
@@ -465,14 +551,14 @@ class SimpleUploadForm(forms.Form):
         choices=(
             ('translate', _('Add as translation')),
             ('suggest', _('Add as a suggestion')),
-            ('fuzzy', _('Add as translation needing review')),
+            ('fuzzy', _('Add as translation needing edit')),
         ),
     )
     fuzzy = forms.ChoiceField(
-        label=_('Processing of strings needing review'),
+        label=_('Processing of strings needing edit'),
         choices=(
             ('', _('Do not import')),
-            ('process', _('Import as string needing review')),
+            ('process', _('Import as string needing edit')),
             ('approve', _('Import as translated')),
         ),
         required=False
@@ -488,7 +574,7 @@ class SimpleUploadForm(forms.Form):
         """Remove add as translation choice."""
         choices = self.fields['method'].choices
         self.fields['method'].choices = [
-            choice for choice in choices if choice[0] == value
+            choice for choice in choices if choice[0] != value
         ]
 
 
@@ -529,7 +615,7 @@ def get_upload_form(user, translation, *args):
     else:
         form = SimpleUploadForm
     result = form(*args)
-    if not can_translate(user, translation):
+    if not can_translate(user, translation=translation):
         result.remove_translation_choice('translate')
         result.remove_translation_choice('fuzzy')
     if not can_suggest(user, translation):
@@ -540,21 +626,9 @@ def get_upload_form(user, translation, *args):
 class FilterField(forms.ChoiceField):
     def __init__(self, *args, **kwargs):
         kwargs['label'] = _('Search filter')
-        kwargs['required'] = False
-        kwargs['choices'] = [
-            ('all', _('All strings')),
-            ('nottranslated', _('Not translated strings')),
-            ('todo', _('Strings needing action')),
-            ('translated', _('Translated strings')),
-            ('fuzzy', _('Strings marked for review')),
-            ('suggestions', _('Strings with suggestions')),
-            ('comments', _('Strings with comments')),
-            ('allchecks', _('Strings with any failing checks')),
-            ('random', _('Random strings for review')),
-        ] + [
-            (CHECKS[check].url_id, CHECKS[check].description)
-            for check in CHECKS if CHECKS[check].target
-        ]
+        if 'required' not in kwargs:
+            kwargs['required'] = False
+        kwargs['choices'] = get_filter_choice()
         kwargs['error_messages'] = {
             'invalid_choice': _('Please select a valid filter type.'),
         }
@@ -611,6 +685,9 @@ class BaseSearchForm(forms.Form):
             elif isinstance(value, datetime):
                 # Convert date to string
                 items.append((param, value.date().isoformat()))
+            elif isinstance(value, list):
+                for val in value:
+                    items.append((param, val))
             else:
                 # It should be string here
                 if value:
@@ -628,7 +705,7 @@ class BaseSearchForm(forms.Form):
 
 class SearchForm(BaseSearchForm):
     """Text searching form."""
-    # pylint: disable=C0103
+    # pylint: disable=invalid-name
     q = forms.CharField(
         label=_('Query'),
         min_length=1,
@@ -638,8 +715,8 @@ class SearchForm(BaseSearchForm):
         label=_('Search type'),
         required=False,
         choices=(
-            ('substring', _('Substring')),
             ('ftx', _('Fulltext')),
+            ('substring', _('Substring')),
             ('exact', _('Exact match')),
         ),
         initial='ftx',
@@ -748,8 +825,7 @@ class SearchForm(BaseSearchForm):
             )
         elif search_name:
             return search_name
-        else:
-            return filter_name
+        return filter_name
 
     def get_search_query(self):
         return self.cleaned_data['q']
@@ -757,10 +833,9 @@ class SearchForm(BaseSearchForm):
 
 class SiteSearchForm(SearchForm):
     """Site wide search form"""
-    lang = forms.ChoiceField(
-        label=_('Language'),
+    lang = forms.MultipleChoiceField(
+        label=_('Languages'),
         required=False,
-        choices=[('', _('All languages'))],
     )
 
     def __init__(self, *args, **kwargs):
@@ -780,7 +855,7 @@ class MergeForm(ChecksumForm):
     def clean(self):
         super(MergeForm, self).clean()
         if 'unit' not in self.cleaned_data or 'merge' not in self.cleaned_data:
-            return
+            return None
         try:
             project = self.translation.subproject.project
             self.cleaned_data['merge_unit'] = merge_unit = Unit.objects.get(
@@ -792,9 +867,9 @@ class MergeForm(ChecksumForm):
             if (unit.id_hash != merge_unit.id_hash and
                     unit.content_hash != merge_unit.content_hash and
                     unit.source != merge_unit.source):
-                raise ValidationError(_('Merged unit not found!'))
+                raise ValidationError(_('Merged string not found!'))
         except Unit.DoesNotExist:
-            raise ValidationError(_('Merged unit not found!'))
+            raise ValidationError(_('Merged string not found!'))
         return self.cleaned_data
 
 
@@ -806,7 +881,7 @@ class RevertForm(ChecksumForm):
         super(RevertForm, self).clean()
         if ('unit' not in self.cleaned_data or
                 'revert' not in self.cleaned_data):
-            return
+            return None
         try:
             self.cleaned_data['revert_change'] = Change.objects.get(
                 pk=self.cleaned_data['revert'],
@@ -819,20 +894,33 @@ class RevertForm(ChecksumForm):
 
 class AutoForm(forms.Form):
     """Automatic translation form."""
-    overwrite = forms.BooleanField(
-        label=_('Overwrite strings'),
-        required=False,
-        initial=False
+    type = FilterField(
+        required=True,
+        initial='todo',
     )
-    inconsistent = forms.BooleanField(
-        label=_('Replace inconsistent'),
-        required=False,
-        initial=False
+    auto_source = forms.ChoiceField(
+        label=_('Automatic translation source'),
+        choices=[
+            ('others', _('Other translation components')),
+            ('mt', _('Machine translation')),
+        ],
+        initial='others',
     )
     subproject = forms.ChoiceField(
         label=_('Component to use'),
         required=False,
         initial=''
+    )
+    engines = forms.MultipleChoiceField(
+        label=_('Machine translation engines to use'),
+        choices=[],
+        required=False,
+    )
+    threshold = forms.IntegerField(
+        label=_("Score threshold"),
+        initial=80,
+        min_value=1,
+        max_value=100,
     )
 
     def __init__(self, obj, user, *args, **kwargs):
@@ -857,6 +945,34 @@ class AutoForm(forms.Form):
 
         self.fields['subproject'].choices = \
             [('', _('All components in current project'))] + choices
+        self.fields['engines'].choices = [
+            (key, mt.name) for key, mt in MACHINE_TRANSLATION_SERVICES.items()
+        ]
+        if 'weblate' in MACHINE_TRANSLATION_SERVICES.keys():
+            self.fields['engines'].initial = 'weblate'
+
+        use_types = {
+            'all', 'nottranslated', 'todo', 'fuzzy', 'check:inconsistent',
+        }
+
+        self.fields['type'].choices = [
+            x for x in self.fields['type'].choices if x[0] in use_types
+        ]
+
+        self.helper = FormHelper(self)
+        self.helper.layout = Layout(
+            Field('type'),
+            InlineRadios('auto_source', id='select_auto_source'),
+            Div(
+                'subproject',
+                css_id='auto_source_others'
+            ),
+            Div(
+                'engines',
+                'threshold',
+                css_id='auto_source_mt'
+            ),
+        )
 
 
 class CommaSeparatedIntegerField(forms.Field):
@@ -959,7 +1075,10 @@ class CommentForm(forms.Form):
         choices=(
             (
                 'global',
-                _('Source string comment, suggestions to change this string')
+                _(
+                    'Source string comment, suggestions for '
+                    'changes to this string'
+                )
             ),
             (
                 'translation',
@@ -1114,90 +1233,80 @@ class ReportsForm(forms.Form):
             ('html', _('HTML')),
         ),
     )
+    period = forms.ChoiceField(
+        label=_('Report period'),
+        choices=(
+            ('month', _('Last month')),
+            ('year', _('Last year')),
+            ('', _('As specified')),
+        ),
+        required=False,
+    )
     start_date = WeblateDateField(
         label=_('Starting date'),
-        initial=date(2000, 1, 1),
+        required=False,
+        datepicker=False,
     )
     end_date = WeblateDateField(
         label=_('Ending date'),
-        initial=date(2100, 1, 1),
+        required=False,
+        datepicker=False,
     )
 
-
-class SubprojectVCSSettingsForm(forms.ModelForm):
-    """Component settings form."""
-    class Meta(object):
-        model = SubProject
-        fields = (
-            'commit_message',
-            'add_message',
-            'delete_message',
-            'repoweb',
-            'push_on_commit',
-            'commit_pending_age',
-            'merge_style',
-        )
-
     def __init__(self, *args, **kwargs):
-        super(SubprojectVCSSettingsForm, self).__init__(*args, **kwargs)
-        self.helper = FormHelper()
+        super(ReportsForm, self).__init__(*args, **kwargs)
+        self.helper = FormHelper(self)
         self.helper.form_tag = False
         self.helper.layout = Layout(
-            Fieldset(
-                _('Locations'),
-                'repoweb',
-            ),
-            Fieldset(
-                _('Version control settings'),
-                'push_on_commit',
-                'commit_pending_age',
-                'merge_style',
-            ),
-            Fieldset(
-                _('Commit messages'),
-                'commit_message',
-                'add_message',
-                'delete_message',
-            ),
+            Field('style'),
+            Field('period'),
+            Div(
+                'start_date',
+                'end_date',
+                css_class='input-group input-daterange',
+                data_provide='datepicker',
+                data_date_format='yyyy-mm-dd',
+            )
         )
 
+    def clean(self):
+        super(ReportsForm, self).clean()
+        # Invalid value, skip rest of the validation
+        if 'period' not in self.cleaned_data:
+            return
 
-class SubprojectTranslationSettingsForm(forms.ModelForm):
-    """Component settings form."""
-    class Meta(object):
-        model = SubProject
-        fields = (
-            'allow_translation_propagation',
-            'save_history',
-            'enable_suggestions',
-            'suggestion_voting',
-            'suggestion_autoaccept',
-            'check_flags',
+        # Handle predefined periods
+        if self.cleaned_data['period'] == 'month':
+            end = timezone.now().replace(day=1) - timedelta(days=1)
+            start = end.replace(day=1)
+        elif self.cleaned_data['period'] == 'year':
+            year = timezone.now().year - 1
+            end = timezone.make_aware(timezone.datetime(year, 12, 31))
+            start = timezone.make_aware(timezone.datetime(year, 1, 1))
+        else:
+            # Validate custom period
+            if (not self.cleaned_data['start_date']
+                    or not self.cleaned_data['end_date']):
+                raise ValidationError(
+                    _('Starting and ending dates have to be specified!')
+                )
+            start = self.cleaned_data['start_date']
+            end = self.cleaned_data['end_date']
+        # Sanitize timestamps
+        self.cleaned_data['start_date'] = start.replace(
+            hour=0, minute=0, second=0, microsecond=0
         )
-
-    def __init__(self, *args, **kwargs):
-        super(SubprojectTranslationSettingsForm, self).__init__(
-            *args, **kwargs
+        self.cleaned_data['end_date'] = end.replace(
+            hour=23, minute=59, second=59, microsecond=999999
         )
-        self.helper = FormHelper()
-        self.helper.form_tag = False
-        self.helper.layout = Layout(
-            Fieldset(
-                _('Suggestions'),
-                'enable_suggestions',
-                'suggestion_voting',
-                'suggestion_autoaccept',
-            ),
-            Fieldset(
-                _('Translation settings'),
-                'allow_translation_propagation',
-                'save_history',
-                'check_flags',
-            ),
-        )
+        # Final validation
+        if self.cleaned_data['start_date'] > self.cleaned_data['end_date']:
+            raise ValidationError(
+                _('Starting date has to be before ending date!')
+            )
 
 
-class SubprojectBasicSettingsForm(forms.ModelForm):
+class SubprojectSettingsForm(forms.ModelForm):
     """Component settings form."""
     class Meta(object):
         model = SubProject
@@ -1205,30 +1314,22 @@ class SubprojectBasicSettingsForm(forms.ModelForm):
             'report_source_bugs',
             'license',
             'license_url',
-        )
 
-    def __init__(self, *args, **kwargs):
-        super(SubprojectBasicSettingsForm, self).__init__(*args, **kwargs)
-        self.helper = FormHelper()
-        self.helper.form_tag = False
-        self.helper.layout = Layout(
-            Fieldset(
-                _('License'),
-                'license',
-                'license_url',
-            ),
-            Fieldset(
-                _('Upstream links'),
-                'report_source_bugs',
-            ),
-        )
+            'allow_translation_propagation',
+            'save_history',
+            'enable_suggestions',
+            'suggestion_voting',
+            'suggestion_autoaccept',
+            'check_flags',
 
+            'commit_message',
+            'add_message',
+            'delete_message',
+            'repoweb',
+            'push_on_commit',
+            'commit_pending_age',
+            'merge_style',
 
-class SubprojectFileSettingsForm(forms.ModelForm):
-    """Component settings form."""
-    class Meta(object):
-        model = SubProject
-        fields = (
             'edit_template',
             'new_lang',
             'new_base',
@@ -1238,28 +1339,76 @@ class SubprojectFileSettingsForm(forms.ModelForm):
         )
 
     def __init__(self, *args, **kwargs):
-        super(SubprojectFileSettingsForm, self).__init__(*args, **kwargs)
+        super(SubprojectSettingsForm, self).__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_tag = False
         self.helper.layout = Layout(
-            Fieldset(
-                _('Languages processing'),
-                'filemask',
-                'language_regex',
-                'template',
-                'edit_template',
-                'new_base',
-                'new_lang',
-            ),
+            TabHolder(
+                Tab(
+                    _('Basic'),
+                    Fieldset(
+                        _('License'),
+                        'license',
+                        'license_url',
+                    ),
+                    Fieldset(
+                        _('Upstream links'),
+                        'report_source_bugs',
+                    ),
+                    css_id='basic',
+                ),
+                Tab(
+                    _('Translation'),
+                    Fieldset(
+                        _('Suggestions'),
+                        'enable_suggestions',
+                        'suggestion_voting',
+                        'suggestion_autoaccept',
+                    ),
+                    Fieldset(
+                        _('Translation settings'),
+                        'allow_translation_propagation',
+                        'save_history',
+                        'check_flags',
+                    ),
+                    css_id='translation',
+                ),
+                Tab(
+                    _('Version control'),
+                    Fieldset(
+                        _('Locations'),
+                        'repoweb',
+                    ),
+                    Fieldset(
+                        _('Version control settings'),
+                        'push_on_commit',
+                        'commit_pending_age',
+                        'merge_style',
+                    ),
+                    Fieldset(
+                        _('Commit messages'),
+                        'commit_message',
+                        'add_message',
+                        'delete_message',
+                    ),
+                    css_id='vcs',
+                ),
+                Tab(
+                    _('Files'),
+                    Fieldset(
+                        _('Languages processing'),
+                        'filemask',
+                        'language_regex',
+                        'template',
+                        'edit_template',
+                        'new_base',
+                        'new_lang',
+                    ),
+                    css_id='files',
+                ),
+                template='layout/pills.html',
+            )
         )
-
-
-SUBPROJECT_SETTINGS = [
-    SubprojectBasicSettingsForm,
-    SubprojectTranslationSettingsForm,
-    SubprojectVCSSettingsForm,
-    SubprojectFileSettingsForm,
-]
 
 
 class ProjectSettingsForm(forms.ModelForm):
@@ -1272,6 +1421,31 @@ class ProjectSettingsForm(forms.ModelForm):
             'instructions',
             'set_translation_team',
         )
+
+
+class ProjectAccessForm(forms.ModelForm):
+    """Project access control settings form."""
+    class Meta(object):
+        model = Project
+        fields = (
+            'access_control',
+            'enable_review',
+        )
+
+    def __init__(self, *args, **kwargs):
+        super(ProjectAccessForm, self).__init__(*args, **kwargs)
+        self.helper = FormHelper(self)
+        self.helper.layout = Layout(
+            Field('access_control'),
+            Div(template='access_control_description.html'),
+            Field('enable_review'),
+        )
+
+
+class DisabledProjectAccessForm(ProjectAccessForm):
+    def __init__(self, *args, **kwargs):
+        super(DisabledProjectAccessForm, self).__init__(*args, **kwargs)
+        self.helper.layout[0] = Field('access_control', disabled=True)
 
 
 class ReplaceForm(forms.Form):
@@ -1317,3 +1491,67 @@ class MatrixLanguageForm(forms.Form):
             (l.code, '{0} ({1})'.format(force_text(l), l.code))
             for l in languages
         ])
+
+
+class NewUnitForm(forms.Form):
+    key = forms.CharField(
+        label=_('Translation key'),
+        help_text=_(
+            'Key used to identify string in translation file. '
+            'File format specific rules might apply.'
+        ),
+        required=True,
+    )
+    value = PluralField(
+        label=_('Source language text'),
+        help_text=_(
+            'You can edit this later, as with any other string in '
+            'the source language.'
+        ),
+        required=True,
+    )
+
+    def __init__(self, user, *args, **kwargs):
+        super(NewUnitForm, self).__init__(*args, **kwargs)
+        self.fields['value'].widget.attrs['tabindex'] = kwargs.pop(
+            'tabindex', 100
+        )
+        self.fields['value'].widget.profile = user.profile
+
+
+class MassStateForm(forms.Form):
+    type = FilterField(
+        required=True,
+        initial='all',
+        widget=forms.RadioSelect
+    )
+    state = forms.ChoiceField(
+        label=_('State to set'),
+        choices=STATE_CHOICES,
+    )
+
+    def __init__(self, user, obj, *args, **kwargs):
+        super(MassStateForm, self).__init__(*args, **kwargs)
+        excluded = {STATE_EMPTY}
+        translation = None
+        if isinstance(obj, Translation):
+            project = obj.subproject.project
+            translation = obj
+        elif isinstance(obj, SubProject):
+            project = obj.project
+        else:
+            project = obj
+
+        # Filter offered states
+        if not can_review_project(user, project):
+            excluded.add(STATE_APPROVED)
+        self.fields['state'].choices = [
+            x for x in self.fields['state'].choices
+            if x[0] not in excluded
+        ]
+
+        # Filter checks
+        if translation:
+            self.fields['type'].choices = [
+                (x[0], x[1]) for x in translation.list_translation_checks
+            ]

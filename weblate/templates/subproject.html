@@ -9,7 +9,7 @@
 <li><a href="{{ object.get_absolute_url }}">{{ object.name }}</a></li>
 
 <a class="pull-right flip" href="{{ object.get_widgets_url }}">
-<img src="{% url 'widget-image' project=object.project.slug widget='svg' color='badge' extension='svg' %}" />
+<img src="{% url 'widget-image' project=object.project.slug subproject=object.slug widget='svg' color='badge' extension='svg' %}" />
 </a>
 {% endblock %}
 
@@ -79,6 +79,7 @@
       <li><a href="{% url 'manage-access' project=object.project.slug %}">{% trans "Manage users" %}</a></li>
       {% endif %}
       {% if user_can_edit_subproject %}
+      <li><a href="{% url 'addons' project=object.project.slug subproject=object.slug %}">{% trans "Addons" %}</a></li>
       <li><a href="{% url 'settings' project=object.project.slug subproject=object.slug %}">{% trans "Settings" %}</a></li>
       {% endif %}
     </ul>
@@ -143,9 +144,23 @@
 <div class="panel panel-primary">
 <div class="panel-heading"><h4 class="panel-title">{% trans "Search and replace" %}</h4></div>
 <div class="panel-body">
-<p>{% trans "You can replace string in all units at once. The search is simple substring case sensitive search." %}</p>
+<p>{% trans "You can replace a string in all strings at once. The search is a simple substring case sensitive search." %}</p>
 {% csrf_token %}
 {{ replace_form|crispy }}
+</div>
+<div class="panel-footer">
+<input type="submit" value="{% trans "Process" %}" class="btn btn-default" />
+</div>
+</div>
+</form>
+
+<form action="{% url 'state-change' project=object.project.slug subproject=object.slug %}" method="post" enctype="multipart/form-data">
+<div class="panel panel-primary">
+<div class="panel-heading"><h4 class="panel-title">{% trans "Mass state change" %}</h4></div>
+<div class="panel-body">
+<p>{% trans "You can change state of all strings matching given type at once." %}</p>
+{% csrf_token %}
+{{ mass_state_form|crispy }}
 </div>
 <div class="panel-footer">
 <input type="submit" value="{% trans "Process" %}" class="btn btn-default" />
@@ -176,15 +191,13 @@
 <div class="panel panel-primary">
 <div class="panel-heading">
 <h4 class="panel-title">
-{% doc_url 'devel/reporting' 'credits' as settings_doc_url %}
-<a class="pull-right flip" href="{{ settings_doc_url }}"><i class="fa fa-question-circle" aria-hidden="true"></i></a>
+{% documentation_icon 'devel/reporting' 'credits' right=True %}
 {% trans "Credits" %}
 </h4>
 </div>
 <div class="panel-body">
 <p>{% trans "Credits list all translators who have contributed to this component in a given time period. It can be useful for including in your documentation or application to thank translators." %}</p>
-{% csrf_token %}
-{{ reports_form|crispy }}
+{% crispy reports_form %}
 </div>
 <div class="panel-footer">
 <input type="submit" value="{% trans "Generate" %}" class="btn btn-default" />
@@ -197,15 +210,13 @@
 <div class="panel panel-primary">
 <div class="panel-heading">
 <h4 class="panel-title">
-{% doc_url 'devel/reporting' 'stats' as settings_doc_url %}
-<a class="pull-right flip" href="{{ settings_doc_url }}"><i class="fa fa-question-circle" aria-hidden="true"></i></a>
+{% documentation_icon 'devel/reporting' 'stats' right=True %}
 {% trans "Contributor stats" %}
 </h4>
 </div>
 <div class="panel-body">
 <p>{% trans "Reports number of strings and words translated by each translator." %}</p>
-{% csrf_token %}
-{{ reports_form|crispy }}
+{% crispy reports_form %}
 </div>
 <div class="panel-footer">
 <input type="submit" value="{% trans "Generate" %}" class="btn btn-default" />

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -110,6 +110,7 @@ def review_source(request, project, subproject):
 def show_source(request, project, subproject):
     """Show source strings summary and checks."""
     obj, source = get_source(request, project, subproject)
+    source.stats.ensure_all()
 
     return render(
         request,

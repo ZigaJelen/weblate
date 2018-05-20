@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -23,10 +23,12 @@
 from __future__ import unicode_literals
 import time
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 from weblate.trans.tests.test_views import ViewTestCase
 from weblate.trans.models import Change
+from weblate.utils.hash import hash_to_checksum
+from weblate.utils.state import STATE_TRANSLATED, STATE_FUZZY
 
 
 class EditTest(ViewTestCase):
@@ -49,8 +51,7 @@ class EditTest(ViewTestCase):
         unit = self.get_unit()
         self.assertEqual(unit.target, 'Nazdar svete!\n')
         self.assertEqual(len(unit.checks()), 0)
-        self.assertTrue(unit.translated)
-        self.assertFalse(unit.fuzzy)
+        self.assertEqual(unit.state, STATE_TRANSLATED)
         self.assert_backend(1)
 
         # Test that second edit with no change does not break anything
@@ -63,8 +64,7 @@ class EditTest(ViewTestCase):
         unit = self.get_unit()
         self.assertEqual(unit.target, 'Nazdar svete!\n')
         self.assertEqual(len(unit.checks()), 0)
-        self.assertTrue(unit.translated)
-        self.assertFalse(unit.fuzzy)
+        self.assertEqual(unit.state, STATE_TRANSLATED)
         self.assert_backend(1)
 
         # Test that third edit still works
@@ -77,8 +77,7 @@ class EditTest(ViewTestCase):
         unit = self.get_unit()
         self.assertEqual(unit.target, 'Ahoj svete!\n')
         self.assertEqual(len(unit.checks()), 0)
-        self.assertTrue(unit.translated)
-        self.assertFalse(unit.fuzzy)
+        self.assertEqual(unit.state, STATE_TRANSLATED)
         self.assert_backend(1)
 
     def test_plurals(self):
@@ -114,14 +113,15 @@ class EditTest(ViewTestCase):
     def test_fuzzy(self):
         """Test for fuzzy flag handling."""
         unit = self.get_unit()
-        self.assertFalse(unit.fuzzy)
+        self.assertNotEqual(unit.state, STATE_FUZZY)
         self.edit_unit(
             'Hello, world!\n',
             'Nazdar svete!\n',
-            fuzzy='yes'
+            fuzzy='yes',
+            review='10',
         )
         unit = self.get_unit()
-        self.assertTrue(unit.fuzzy)
+        self.assertEqual(unit.state, STATE_FUZZY)
         self.assertEqual(unit.target, 'Nazdar svete!\n')
         self.assertFalse(unit.has_failing_check)
         self.edit_unit(
@@ -129,7 +129,7 @@ class EditTest(ViewTestCase):
             'Nazdar svete!\n',
         )
         unit = self.get_unit()
-        self.assertFalse(unit.fuzzy)
+        self.assertEqual(unit.state, STATE_TRANSLATED)
         self.assertEqual(unit.target, 'Nazdar svete!\n')
         self.assertFalse(unit.has_failing_check)
         self.edit_unit(
@@ -138,34 +138,9 @@ class EditTest(ViewTestCase):
             fuzzy='yes'
         )
         unit = self.get_unit()
-        self.assertTrue(unit.fuzzy)
+        self.assertEqual(unit.state, STATE_FUZZY)
         self.assertEqual(unit.target, 'Nazdar svete!\n')
         self.assertFalse(unit.has_failing_check)
-
-    def test_skip_fuzzy(self):
-        """Test for fuzzy flag handling."""
-        if self.monolingual:
-            return
-        unit = self.get_unit()
-        self.assertFalse(unit.fuzzy)
-        self.edit_unit(
-            'Hello, world!\n',
-            'Nazdar svete!\n',
-            fuzzy='yes'
-        )
-        unit = self.get_unit()
-        unit.translation.commit_pending(None)
-        self.assertTrue(unit.fuzzy)
-        self.subproject.check_flags = 'skip-review-flag'
-        self.subproject.save()
-        self.subproject.create_translations(True)
-        unit = self.get_unit()
-        self.assertFalse(unit.fuzzy)
-        self.subproject.check_flags = ''
-        self.subproject.save()
-        self.subproject.create_translations(True)
-        unit = self.get_unit()
-        self.assertTrue(unit.fuzzy)
 
 
 class EditValidationTest(ViewTestCase):
@@ -193,7 +168,7 @@ class EditValidationTest(ViewTestCase):
     def test_edit_spam(self):
         """Editing with spam trap."""
         response = self.edit(content='1')
-        self.assertContains(response, 'po/cs.po, translation unit 2')
+        self.assertContains(response, 'po/cs.po, string 2')
 
     def test_merge(self):
         """Merging with invalid parameter."""
@@ -272,8 +247,7 @@ class EditResourceSourceTest(ViewTestCase):
         unit = self.get_unit('Nazdar svete!\n')
         self.assertEqual(unit.target, 'Nazdar svete!\n')
         self.assertEqual(len(unit.checks()), 0)
-        self.assertTrue(unit.translated)
-        self.assertFalse(unit.fuzzy)
+        self.assertEqual(unit.state, STATE_TRANSLATED)
         self.assert_backend(4)
 
     def test_edit_revert(self):
@@ -290,8 +264,7 @@ class EditResourceSourceTest(ViewTestCase):
         self._language_code = 'en'
 
         unit = translation.unit_set.get(context='hello')
-        self.assertTrue(unit.translated)
-        self.assertFalse(unit.fuzzy)
+        self.assertEqual(unit.state, STATE_TRANSLATED)
 
         # Edit source
         self.edit_unit(
@@ -300,8 +273,7 @@ class EditResourceSourceTest(ViewTestCase):
         )
 
         unit = translation.unit_set.get(context='hello')
-        self.assertFalse(unit.translated)
-        self.assertTrue(unit.fuzzy)
+        self.assertEqual(unit.state, STATE_FUZZY)
 
         # Revert source
         self.edit_unit(
@@ -310,8 +282,7 @@ class EditResourceSourceTest(ViewTestCase):
         )
 
         unit = translation.unit_set.get(context='hello')
-        self.assertTrue(unit.translated)
-        self.assertFalse(unit.fuzzy)
+        self.assertEqual(unit.state, STATE_TRANSLATED)
 
     def get_translation(self):
         return self.subproject.translation_set.get(
@@ -337,6 +308,36 @@ class EditPoMonoTest(EditTest):
 
     def create_subproject(self):
         return self.create_po_mono()
+
+    def test_new_unit(self):
+        def add(key):
+            return self.client.post(
+                reverse(
+                    'new-unit',
+                    kwargs={
+                        'project': 'test',
+                        'subproject': 'test',
+                        'lang': 'en',
+                    }
+                ),
+                {'key': key, 'value_0': 'Source string'},
+                follow=True,
+            )
+        response = add('key')
+        self.assertEqual(response.status_code, 403)
+        self.make_manager()
+        response = add('key')
+        self.assertContains(
+            response, 'New string has been added'
+        )
+        response = add('key')
+        self.assertContains(
+            response, 'Translation with this key seem to already exist'
+        )
+        response = add('')
+        self.assertContains(
+            response, 'Error in parameter key'
+        )
 
 
 class EditIphoneTest(EditTest):
@@ -369,6 +370,14 @@ class EditRubyYAMLTest(EditTest):
 
     def create_subproject(self):
         return self.create_ruby_yaml()
+
+
+class EditDTDTest(EditTest):
+    has_plurals = False
+    monolingual = True
+
+    def create_subproject(self):
+        return self.create_dtd()
 
 
 class EditJSONMonoTest(EditTest):
@@ -442,7 +451,7 @@ class ZenViewTest(ViewTestCase):
         )
         self.assertContains(
             response,
-            'You have reached end of translating.'
+            'The translation has come to an end.'
         )
 
     def test_zen_invalid(self):
@@ -467,7 +476,7 @@ class ZenViewTest(ViewTestCase):
         )
         self.assertContains(
             response,
-            'You have reached end of translating.'
+            'The translation has come to an end.'
         )
 
     def test_load_zen_offset(self):
@@ -496,7 +505,10 @@ class ZenViewTest(ViewTestCase):
         unit = self.get_unit()
         params = {
             'checksum': unit.checksum,
-            'target_0': 'Zen translation'
+            'contentsum': hash_to_checksum(unit.content_hash),
+            'translationsum': hash_to_checksum(unit.get_target_hash()),
+            'target_0': 'Zen translation',
+            'review': '20',
         }
         response = self.client.post(
             reverse('save_zen', kwargs=self.kw_translation),
@@ -514,15 +526,17 @@ class ZenViewTest(ViewTestCase):
         unit = self.get_unit()
         params = {
             'checksum': unit.checksum,
-            'target_0': 'Zen translation'
+            'contentsum': hash_to_checksum(unit.content_hash),
+            'translationsum': hash_to_checksum(unit.get_target_hash()),
+            'target_0': 'Zen translation',
+            'review': '20',
         }
         response = self.client.post(
             reverse('save_zen', kwargs=self.kw_translation),
             params
         )
         self.assertContains(
-            response,
-            'You don&#39;t have privileges to save translations!',
+            response, 'Insufficient privileges for saving translations.'
         )
 
 
@@ -637,7 +651,7 @@ class EditComplexTest(ViewTestCase):
         self.assertFalse(unit.has_failing_check)
         self.assertEqual(len(unit.checks()), 0)
         self.assertEqual(len(unit.active_checks()), 0)
-        self.assertEqual(unit.translation.failing_checks, 0)
+        self.assertEqual(unit.translation.stats.allchecks, 0)
         self.assert_backend(1)
 
     def test_edit_check(self):
@@ -653,7 +667,7 @@ class EditComplexTest(ViewTestCase):
         self.assertTrue(unit.has_failing_check)
         self.assertEqual(len(unit.checks()), 1)
         self.assertEqual(len(unit.active_checks()), 1)
-        self.assertEqual(unit.translation.failing_checks, 1)
+        self.assertEqual(unit.translation.stats.allchecks, 1)
 
         # Ignore check
         check_id = unit.checks()[0].id
@@ -666,7 +680,7 @@ class EditComplexTest(ViewTestCase):
         self.assertFalse(unit.has_failing_check)
         self.assertEqual(len(unit.checks()), 1)
         self.assertEqual(len(unit.active_checks()), 0)
-        self.assertEqual(unit.translation.failing_checks, 0)
+        self.assertEqual(unit.translation.stats.allchecks, 0)
 
         # Save with no failing checks
         response = self.edit_unit(
@@ -679,7 +693,7 @@ class EditComplexTest(ViewTestCase):
         self.assertEqual(unit.target, 'Nazdar svete!\n')
         self.assertFalse(unit.has_failing_check)
         self.assertEqual(len(unit.checks()), 0)
-        self.assertEqual(unit.translation.failing_checks, 0)
+        self.assertEqual(unit.translation.stats.allchecks, 0)
         self.assert_backend(1)
 
     def test_commit_push(self):
@@ -719,6 +733,48 @@ class EditComplexTest(ViewTestCase):
         # We should get to second message
         self.assertContains(
             response,
-            'This translation is currently locked for updates!'
+            'This translation is currently locked for updates.'
         )
         self.assert_backend(0)
+
+    def test_edit_changed_source(self):
+        # We use invalid contentsum here
+        response = self.edit_unit(
+            'Hello, world!\n',
+            'Nazdar svete!\n',
+            contentsum='aaa',
+        )
+        # We should get an error message
+        self.assertContains(
+            response,
+            'Source string has been changed meanwhile'
+        )
+        self.assert_backend(0)
+
+    def test_edit_changed_translation(self):
+        # We use invalid translationsum here
+        response = self.edit_unit(
+            'Hello, world!\n',
+            'Nazdar svete!\n',
+            translationsum='aaa',
+        )
+        # We should get an error message
+        self.assertContains(
+            response,
+            'Translation of the string has been changed meanwhile'
+        )
+        self.assert_backend(0)
+
+    def test_edit_view(self):
+        url = self.get_unit('Hello, world!\n').get_absolute_url()
+        response = self.client.get(url)
+        form = response.context['form']
+        params = {}
+        for field in form.fields.keys():
+            params[field] = form[field].value()
+        params['target_0'] = 'Nazdar svete!\n'
+        response = self.client.post(url, params)
+        unit = self.get_unit()
+        self.assertEqual(unit.target, 'Nazdar svete!\n')
+        self.assertEqual(unit.state, STATE_TRANSLATED)
+        self.assert_backend(1)

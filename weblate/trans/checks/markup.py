@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -55,7 +55,7 @@ class BBCodeCheck(TargetCheck):
         # Parse source
         src_match = BBCODE_MATCH.findall(source)
         # Any BBCode in source?
-        if len(src_match) == 0:
+        if not src_match:
             return False
         # Parse target
         tgt_match = BBCODE_MATCH.findall(target)

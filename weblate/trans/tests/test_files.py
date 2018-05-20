@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -22,9 +22,13 @@
 
 from __future__ import unicode_literals
 
-from django.contrib.messages import ERROR
-from django.core.urlresolvers import reverse
+from unittest import SkipTest
 
+from django.contrib.messages import ERROR
+from django.test import SimpleTestCase
+from django.urls import reverse
+
+from weblate.trans.forms import SimpleUploadForm
 from weblate.trans.tests.test_views import ViewTestCase
 from weblate.trans.tests.utils import get_test_file
 
@@ -82,9 +86,9 @@ class ImportTest(ImportBaseTest):
 
         # Verify stats
         translation = self.get_translation()
-        self.assertEqual(translation.translated, 1)
-        self.assertEqual(translation.fuzzy, 0)
-        self.assertEqual(translation.total, 4)
+        self.assertEqual(translation.stats.translated, 1)
+        self.assertEqual(translation.stats.fuzzy, 0)
+        self.assertEqual(translation.stats.all, 4)
 
         # Verify unit
         unit = self.get_unit()
@@ -99,9 +103,9 @@ class ImportTest(ImportBaseTest):
 
         # Verify stats
         translation = self.get_translation()
-        self.assertEqual(translation.translated, 1)
-        self.assertEqual(translation.fuzzy, 0)
-        self.assertEqual(translation.total, 4)
+        self.assertEqual(translation.stats.translated, 1)
+        self.assertEqual(translation.stats.fuzzy, 0)
+        self.assertEqual(translation.stats.all, 4)
 
         # Verify unit
         unit = self.get_unit()
@@ -129,9 +133,9 @@ class ImportTest(ImportBaseTest):
 
         # Verify stats
         translation = self.get_translation()
-        self.assertEqual(translation.translated, 1)
-        self.assertEqual(translation.fuzzy, 0)
-        self.assertEqual(translation.total, 4)
+        self.assertEqual(translation.stats.translated, 1)
+        self.assertEqual(translation.stats.fuzzy, 0)
+        self.assertEqual(translation.stats.all, 4)
 
         # Verify unit
         unit = self.get_unit()
@@ -173,9 +177,9 @@ class ImportTest(ImportBaseTest):
 
         # Verify stats
         translation = self.get_translation()
-        self.assertEqual(translation.translated, 0)
-        self.assertEqual(translation.fuzzy, 1)
-        self.assertEqual(translation.total, 4)
+        self.assertEqual(translation.stats.translated, 0)
+        self.assertEqual(translation.stats.fuzzy, 1)
+        self.assertEqual(translation.stats.all, 4)
 
     def test_import_suggest(self):
         """Test importing as suggestion."""
@@ -188,13 +192,20 @@ class ImportTest(ImportBaseTest):
 
         # Verify stats
         translation = self.get_translation()
-        self.assertEqual(translation.translated, 0)
-        self.assertEqual(translation.fuzzy, 0)
-        self.assertEqual(translation.total, 4)
+        self.assertEqual(translation.stats.translated, 0)
+        self.assertEqual(translation.stats.fuzzy, 0)
+        self.assertEqual(translation.stats.all, 4)
         self.assertEqual(
-            translation.have_suggestion,
+            translation.stats.suggestions,
             1
         )
+
+    def test_import_xliff(self):
+        response = self.do_import(test_file=TEST_XLIFF, follow=True)
+        self.assertContains(response, 'updated: 1')
+        # Verify stats
+        translation = self.get_translation()
+        self.assertEqual(translation.stats.translated, 1)
 
 
 class ImportErrorTest(ImportBaseTest):
@@ -233,9 +244,9 @@ class ImportFuzzyTest(ImportBaseTest):
 
         # Verify stats
         translation = self.get_translation()
-        self.assertEqual(translation.translated, 0)
-        self.assertEqual(translation.fuzzy, 0)
-        self.assertEqual(translation.total, 4)
+        self.assertEqual(translation.stats.translated, 0)
+        self.assertEqual(translation.stats.fuzzy, 0)
+        self.assertEqual(translation.stats.all, 4)
 
     def test_import_process(self):
         """Test importing normally."""
@@ -246,9 +257,9 @@ class ImportFuzzyTest(ImportBaseTest):
 
         # Verify stats
         translation = self.get_translation()
-        self.assertEqual(translation.translated, 0)
-        self.assertEqual(translation.fuzzy, 1)
-        self.assertEqual(translation.total, 4)
+        self.assertEqual(translation.stats.translated, 0)
+        self.assertEqual(translation.stats.fuzzy, 1)
+        self.assertEqual(translation.stats.all, 4)
 
     def test_import_approve(self):
         """Test importing normally."""
@@ -259,9 +270,9 @@ class ImportFuzzyTest(ImportBaseTest):
 
         # Verify stats
         translation = self.get_translation()
-        self.assertEqual(translation.translated, 1)
-        self.assertEqual(translation.fuzzy, 0)
-        self.assertEqual(translation.total, 4)
+        self.assertEqual(translation.stats.translated, 1)
+        self.assertEqual(translation.stats.fuzzy, 0)
+        self.assertEqual(translation.stats.all, 4)
 
 
 class ImportMoTest(ImportTest):
@@ -277,6 +288,24 @@ class ImportMoPoTest(ImportTest):
         return self.create_po()
 
 
+class ImportJoomlaTest(ImportTest):
+    def create_subproject(self):
+        return self.create_joomla()
+
+    def test_import_fuzzy(self):
+        # Does not make sense here
+        raise SkipTest('Fuzzy flag not supported on Joomla format')
+
+
+class ImportPHPMonoTest(ImportTest):
+    def create_subproject(self):
+        return self.create_php_mono()
+
+    def test_import_fuzzy(self):
+        # Does not make sense here
+        raise SkipTest('Fuzzy flag not supported on PHP format')
+
+
 class StringsImportTest(ImportTest):
     """Testing of mo file imports."""
     test_file = TEST_PO
@@ -286,7 +315,7 @@ class StringsImportTest(ImportTest):
 
     def test_import_fuzzy(self):
         # Does not make sense here
-        pass
+        raise SkipTest('Fuzzy flag not supported on Strings format')
 
 
 class AndroidImportTest(ViewTestCase):
@@ -304,9 +333,9 @@ class AndroidImportTest(ViewTestCase):
             )
         # Verify stats
         translation = self.get_translation()
-        self.assertEqual(translation.translated, 2)
-        self.assertEqual(translation.fuzzy, 0)
-        self.assertEqual(translation.total, 4)
+        self.assertEqual(translation.stats.translated, 2)
+        self.assertEqual(translation.stats.fuzzy, 0)
+        self.assertEqual(translation.stats.all, 4)
 
 
 class CSVImportTest(ViewTestCase):
@@ -314,8 +343,8 @@ class CSVImportTest(ViewTestCase):
 
     def test_import(self):
         translation = self.get_translation()
-        self.assertEqual(translation.translated, 0)
-        self.assertEqual(translation.fuzzy, 0)
+        self.assertEqual(translation.stats.translated, 0)
+        self.assertEqual(translation.stats.fuzzy, 0)
         with open(self.test_file, 'rb') as handle:
             self.client.post(
                 reverse(
@@ -326,8 +355,8 @@ class CSVImportTest(ViewTestCase):
             )
         # Verify stats
         translation = self.get_translation()
-        self.assertEqual(translation.translated, 1)
-        self.assertEqual(translation.fuzzy, 0)
+        self.assertEqual(translation.stats.translated, 1)
+        self.assertEqual(translation.stats.fuzzy, 0)
 
 
 class CSVQuotesImportTest(CSVImportTest):
@@ -360,19 +389,21 @@ class ExportTest(ViewTestCase):
             )
         )
         self.assertContains(response, 'Weblate Hello World 2016')
+        self.assertContains(response, 'Nazdar svete!')
         self.assertEqual(
             response['Content-Disposition'],
             'attachment; filename=test-test-cs.po'
         )
 
-    def export_format(self, fmt):
+    def export_format(self, fmt, **extra):
         kwargs = {'fmt': fmt}
         kwargs.update(self.kw_translation)
         return self.client.get(
             reverse(
                 'download_translation_format',
                 kwargs=kwargs
-            )
+            ),
+            **extra
         )
 
     def test_export_po(self):
@@ -382,6 +413,21 @@ class ExportTest(ViewTestCase):
         )
         self.assertContains(
             response, '/projects/test/test/cs/'
+        )
+
+    def test_export_po_todo(self):
+        response = self.export_format('po', type='todo')
+        self.assertContains(
+            response, 'Orangutan has %d bananas'
+        )
+        self.assertContains(
+            response, '/projects/test/test/cs/'
+        )
+
+    def test_export_tmx(self):
+        response = self.export_format('tmx')
+        self.assertContains(
+            response, 'Orangutan has %d banana'
         )
 
     def test_export_xliff(self):
@@ -403,14 +449,12 @@ class ExportTest(ViewTestCase):
         response = self.export_format('invalid')
         self.assertEqual(response.status_code, 404)
 
-    def test_language_pack(self):
-        response = self.client.get(
-            reverse(
-                'download_language_pack',
-                kwargs=self.kw_translation
-            )
-        )
+
+class FormTest(SimpleTestCase):
+    def test_remove(self):
+        form = SimpleUploadForm()
+        form.remove_translation_choice('suggest')
         self.assertEqual(
-            response['Content-Disposition'],
-            'attachment; filename=test-test-cs.mo',
+            [x[0] for x in form.fields['method'].choices],
+            ['translate', 'fuzzy']
         )

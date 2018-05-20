@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -91,7 +91,12 @@ class PermissionsTest(TestCase):
 
     def test_cache(self):
         comment = Comment(project=self.project)
-        key = ('_can_delete_comment', self.project.get_full_slug())
+        key = (
+            '_can_delete_comment',
+            '{}-{}'.format(
+                self.project.__class__.__name__, self.project.pk
+            )
+        )
         self.assertTrue(not hasattr(self.user, 'acl_permissions_cache'))
         self.assertFalse(can_delete_comment(self.user, comment))
         self.assertFalse(self.user.acl_permissions_cache[key])
@@ -128,7 +133,9 @@ class GroupACLTest(ModelTestCase):
         self.subproject.translation_set.all().delete()
         self.language = Language.objects.get_default()
         self.trans = Translation.objects.create(
-            subproject=self.subproject, language=self.language,
+            subproject=self.subproject,
+            language=self.language,
+            plural=self.language.plural,
             filename="this/is/not/a.template"
         )
 
@@ -238,10 +245,12 @@ class GroupACLTest(ModelTestCase):
         lang_de = Language.objects.get(code='de')
         trans_cs = Translation.objects.create(
             subproject=self.subproject, language=lang_cs,
+            plural=lang_cs.plural,
             filename="this/is/not/a.template"
         )
         trans_de = Translation.objects.create(
             subproject=self.subproject, language=lang_de,
+            plural=lang_de.plural,
             filename="this/is/not/a.template"
         )
 
@@ -264,10 +273,12 @@ class GroupACLTest(ModelTestCase):
         lang_de = Language.objects.get(code='de')
         trans_cs = Translation.objects.create(
             subproject=self.subproject, language=lang_cs,
+            plural=lang_cs.plural,
             filename="this/is/not/a.template"
         )
         trans_de = Translation.objects.create(
             subproject=self.subproject, language=lang_de,
+            plural=lang_de.plural,
             filename="this/is/not/a.template"
         )
 
@@ -318,10 +329,12 @@ class GroupACLTest(ModelTestCase):
         lang_de = Language.objects.get(code='de')
         trans_cs = Translation.objects.create(
             subproject=self.subproject, language=lang_cs,
+            plural=lang_cs.plural,
             filename="this/is/not/a.template"
         )
         trans_de = Translation.objects.create(
             subproject=self.subproject, language=lang_de,
+            plural=lang_de.plural,
             filename="this/is/not/a.template"
         )
         perm_name = 'trans.author_translation'

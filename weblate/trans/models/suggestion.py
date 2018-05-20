@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -21,18 +21,25 @@
 from __future__ import unicode_literals
 
 from django.contrib.auth.models import User
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Count
 from django.utils.encoding import python_2_unicode_compatible
+from django.utils.translation import ugettext as _
 
 from weblate.accounts.notifications import notify_new_suggestion
 from weblate.lang.models import Language
+from weblate.permissions.helpers import (
+    can_accept_suggestion, can_vote_suggestion
+)
 from weblate.trans.models.change import Change
+from weblate.trans.models.unitdata import UnitData
 from weblate.trans.mixins import UserDisplayMixin
+from weblate.utils import messages
+from weblate.utils.state import STATE_TRANSLATED
 
 
 class SuggestionManager(models.Manager):
-    # pylint: disable=W0232
+    # pylint: disable=no-init
 
     def add(self, unit, target, request, vote=False):
         """Create new suggestion for this unit."""
@@ -58,14 +65,15 @@ class SuggestionManager(models.Manager):
         )
 
         # Record in change
-        Change.objects.create(
-            unit=unit,
-            action=Change.ACTION_SUGGESTION,
-            translation=unit.translation,
-            user=user,
-            target=target,
-            author=user
-        )
+        for aunit in suggestion.related_units:
+            Change.objects.create(
+                unit=aunit,
+                action=Change.ACTION_SUGGESTION,
+                translation=aunit.translation,
+                user=user,
+                target=target,
+                author=user
+            )
 
         # Add unit vote
         if vote:
@@ -104,12 +112,14 @@ class SuggestionManager(models.Manager):
 
 
 @python_2_unicode_compatible
-class Suggestion(models.Model, UserDisplayMixin):
-    content_hash = models.BigIntegerField(db_index=True)
+class Suggestion(UnitData, UserDisplayMixin):
     target = models.TextField()
-    user = models.ForeignKey(User, null=True, blank=True)
-    project = models.ForeignKey('Project')
-    language = models.ForeignKey(Language)
+    user = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.deletion.CASCADE
+    )
+    language = models.ForeignKey(
+        Language, on_delete=models.deletion.CASCADE
+    )
     timestamp = models.DateTimeField(auto_now_add=True)
 
     votes = models.ManyToManyField(
@@ -128,6 +138,9 @@ class Suggestion(models.Model, UserDisplayMixin):
         )
         app_label = 'trans'
         ordering = ['-timestamp']
+        index_together = [
+            ('project', 'language', 'content_hash'),
+        ]
 
     def __str__(self):
         return 'suggestion for {0} by {1}'.format(
@@ -135,31 +148,41 @@ class Suggestion(models.Model, UserDisplayMixin):
             self.user.username if self.user else 'unknown',
         )
 
-    def accept(self, translation, request):
-        allunits = translation.unit_set.filter(
+    @transaction.atomic
+    def accept(self, translation, request, check=can_accept_suggestion):
+        allunits = translation.unit_set.select_for_update().filter(
             content_hash=self.content_hash,
         )
+        failure = False
         for unit in allunits:
+            if not check(request.user, unit):
+                failure = True
+                messages.error(request, _('Failed to accept suggestion!'))
+                continue
+
+            # Skip if there is no change
+            if unit.target == self.target and unit.state >= STATE_TRANSLATED:
+                continue
+
             unit.target = self.target
-            unit.fuzzy = False
+            unit.state = STATE_TRANSLATED
             unit.save_backend(
                 request, change_action=Change.ACTION_ACCEPT, user=self.user
             )
 
-        self.delete()
+        if not failure:
+            self.delete()
 
-    def delete_log(self, translation, request):
+    def delete_log(self, user, change=Change.ACTION_SUGGESTION_DELETE):
         """Delete with logging change"""
-        allunits = translation.unit_set.filter(
-            content_hash=self.content_hash,
-        )
-        for unit in allunits:
+        for unit in self.related_units:
             Change.objects.create(
                 unit=unit,
-                action=Change.ACTION_SUGGESTION_DELETE,
+                action=change,
                 translation=unit.translation,
-                user=request.user,
-                author=request.user
+                user=user,
+                target=self.target,
+                author=user
             )
         self.delete()
 
@@ -187,14 +210,18 @@ class Suggestion(models.Model, UserDisplayMixin):
         # Automatic accepting
         required_votes = translation.subproject.suggestion_autoaccept
         if required_votes and self.get_num_votes() >= required_votes:
-            self.accept(translation, request)
+            self.accept(translation, request, can_vote_suggestion)
 
 
 @python_2_unicode_compatible
 class Vote(models.Model):
     """Suggestion voting."""
-    suggestion = models.ForeignKey(Suggestion)
-    user = models.ForeignKey(User)
+    suggestion = models.ForeignKey(
+        Suggestion, on_delete=models.deletion.CASCADE
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.deletion.CASCADE
+    )
     positive = models.BooleanField(default=True)
 
     class Meta(object):

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -24,7 +24,7 @@ from django.views.generic.list import ListView
 from django.http import Http404, HttpResponse
 from django.contrib.auth.models import User
 from django.utils.translation import ugettext as _, activate, pgettext
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.db.models import Q
 from django.core.exceptions import PermissionDenied
 from django.utils.http import urlencode
@@ -119,7 +119,7 @@ class ChangesView(ListView):
         if self.glossary:
             url['glossary'] = 1
 
-        if len(url) == 0:
+        if not url:
             context['changes_rss'] = reverse('rss')
 
         context['query_string'] = urlencode(url)

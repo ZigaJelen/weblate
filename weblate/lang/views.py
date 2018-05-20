@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -26,9 +26,9 @@ from django.utils.http import urlencode
 from weblate.lang.models import Language
 from weblate.trans.forms import SiteSearchForm
 from weblate.trans.models import Project, Change
-from weblate.trans.stats import get_per_language_stats
-from weblate.trans.util import sort_objects, translation_percent
+from weblate.trans.util import sort_objects
 from weblate.trans.views.helper import get_project
+from weblate.utils.stats import prefetch_stats
 
 
 def show_languages(request):
@@ -37,8 +37,10 @@ def show_languages(request):
         'languages.html',
         {
             'allow_index': True,
-            'languages': sort_objects(
-                Language.objects.have_translation()
+            'languages': prefetch_stats(
+                sort_objects(
+                    Language.objects.have_translation()
+                )
             ),
             'title': _('Languages'),
         }
@@ -66,11 +68,7 @@ def show_language(request, lang):
     ).distinct()
 
     for project in projects:
-        stats = get_per_language_stats(project, obj)
-        project.language_stats = (
-            translation_percent(stats[0][1], stats[0][2]),
-            translation_percent(stats[0][3], stats[0][4])
-        )
+        project.language_stats = project.stats.get_single_language_stats(obj)
 
     return render(
         request,
@@ -101,7 +99,7 @@ def show_project(request, lang, project):
         translation__language=obj,
         subproject__project=pobj
     )[:10]
-    translations = obj.translation_set.enabled().filter(
+    translations = obj.translation_set.prefetch().filter(
         subproject__project=pobj
     ).order_by(
         'subproject__project__slug', 'subproject__slug'

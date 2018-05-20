@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -22,9 +22,8 @@ from __future__ import print_function, unicode_literals
 
 import importlib
 import sys
-# For some reasons, this fails in PyLint sometimes...
-# pylint: disable=E0611,F0401
 from distutils.version import LooseVersion
+from django.core.exceptions import ImproperlyConfigured
 from weblate.trans.vcs import (
     GitRepository, HgRepository, SubversionRepository, GitWithGerritRepository,
     GithubRepository,
@@ -41,7 +40,7 @@ def get_version_module(module, name, url, optional=False):
     except ImportError:
         if optional:
             return None
-        raise Exception(
+        raise ImproperlyConfigured(
             'Failed to import {0}, please install {1} from {2}'.format(
                 module.replace('.__version__', ''),
                 name,
@@ -136,6 +135,8 @@ def get_single(name, url, module, required, getter='__version__'):
         current = version_getter()
     else:
         current = version_getter
+    if isinstance(current, tuple):
+        current = '.'.join([str(x) for x in current])
     return (
         name,
         url,
@@ -159,7 +160,7 @@ def get_versions():
         'Django',
         'https://www.djangoproject.com/',
         'django',
-        '1.10',
+        '1.11',
         'get_version'
     ))
 
@@ -195,7 +196,7 @@ def get_versions():
         'Translate Toolkit',
         'http://toolkit.translatehouse.org/',
         'translate.__version__',
-        '2.0.0',
+        '2.3.0',
         'sver',
     ))
 
@@ -222,7 +223,7 @@ def get_versions():
             '1.6',
         ))
     except OSError:
-        raise Exception('Failed to run git, please install it.')
+        raise ImproperlyConfigured('Failed to run git, please install it.')
 
     result.append(get_single(
         'Pillow (PIL)',
@@ -264,7 +265,15 @@ def get_versions():
         'djangorestframework',
         'http://www.django-rest-framework.org/',
         'rest_framework',
-        '3.4',
+        '3.7',
+    ))
+
+    result.append(get_single(
+        'user-agents',
+        'https://github.com/selwin/python-user-agents',
+        'user_agents',
+        '1.1.0',
+        'VERSION',
     ))
 
     return result
@@ -291,7 +300,7 @@ def check_requirements():
         failure |= check_version(*version)
 
     if failure:
-        raise Exception(
+        raise ImproperlyConfigured(
             'Some of required modules are missing or too old! '
             'Check above output for details.'
         )

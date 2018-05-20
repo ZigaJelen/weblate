@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -22,7 +22,7 @@
 Tests for comment views.
 """
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 from weblate.trans.tests.test_views import FixtureTestCase
 from weblate.trans.models import Comment
@@ -34,8 +34,6 @@ class CommentViewTest(FixtureTestCase):
         self.translation = self.subproject.translation_set.get(
             language_code='cs'
         )
-        self.translation.invalidate_cache('comments')
-        self.translation.invalidate_cache('sourcecomments')
 
     def test_add_target_comment(self):
         unit = self.get_unit()
@@ -62,11 +60,11 @@ class CommentViewTest(FixtureTestCase):
         # Check number of comments
         self.assertTrue(unit.has_comment)
         self.assertEqual(
-            translation.have_comment,
+            translation.stats.comments,
             1
         )
         self.assertEqual(
-            translation.unit_set.count_type('sourcecomments', translation),
+            translation.stats.sourcecomments,
             0
         )
 
@@ -95,11 +93,11 @@ class CommentViewTest(FixtureTestCase):
         # Check number of comments
         self.assertTrue(unit.has_comment)
         self.assertEqual(
-            translation.have_comment,
+            translation.stats.comments,
             1
         )
         self.assertEqual(
-            translation.unit_set.count_type('sourcecomments', translation),
+            translation.stats.sourcecomments,
             1
         )
 

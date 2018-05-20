@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -27,14 +27,13 @@ from six import StringIO
 from django.test import TestCase
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.contrib.auth.models import User
 
 from weblate.trans.tests.test_models import RepoTestCase
 from weblate.trans.models import (
     Translation, SubProject, Suggestion, IndexUpdate
 )
 from weblate.runner import main
-from weblate.trans.tests.utils import get_test_file
+from weblate.trans.tests.utils import get_test_file, create_test_user
 from weblate.trans.vcs import HgRepository
 from weblate.accounts.models import Profile
 
@@ -63,6 +62,18 @@ class ImportProjectTest(RepoTestCase):
         self.do_import()
         # We should have loaded four subprojects
         self.assertEqual(project.subproject_set.count(), 4)
+
+    def test_import_deep(self):
+        project = self.create_project()
+        call_command(
+            'import_project',
+            'test',
+            self.git_repo_path,
+            'master',
+            'deep/*/locales/*/LC_MESSAGES/**.po',
+        )
+        # We should have loaded four subprojects
+        self.assertEqual(project.subproject_set.count(), 1)
 
     def test_import_ignore(self):
         project = self.create_project()
@@ -218,7 +229,7 @@ class ImportProjectTest(RepoTestCase):
             base_file_template='android/values/strings.xml',
         )
         # We should have loaded one subproject
-        self.assertEqual(project.subproject_set.count(), 1)
+        self.assertEqual(project.subproject_set.count(), 2)
 
     def test_import_aresource_format(self):
         project = self.create_project()
@@ -232,7 +243,7 @@ class ImportProjectTest(RepoTestCase):
             base_file_template='%s/values/strings.xml',
         )
         # We should have loaded one subproject
-        self.assertEqual(project.subproject_set.count(), 1)
+        self.assertEqual(project.subproject_set.count(), 2)
 
     def test_re_import(self):
         project = self.create_project()
@@ -318,7 +329,7 @@ class ImportProjectTest(RepoTestCase):
         call_command(
             'import_project',
             'test',
-            self.hg_repo_path,
+            self.mercurial_repo_path,
             'default',
             '**/*.po',
             vcs='mercurial'
@@ -336,7 +347,7 @@ class ImportProjectTest(RepoTestCase):
             call_command,
             'import_project',
             'test',
-            self.hg_repo_path,
+            self.mercurial_repo_path,
             'default',
             '*/**.po',
             vcs='mercurial'
@@ -624,17 +635,13 @@ class SuggestionCommandTest(RepoTestCase):
         self.subproject = self.create_subproject()
 
     def test_add_suggestions(self):
-        user = User.objects.create_user(
-            'testuser',
-            'weblate@example.org',
-            'testpassword'
-        )
+        user = create_test_user()
         call_command(
             'add_suggestions', 'test', 'test', 'cs', TEST_PO,
             author=user.email
         )
         translation = self.subproject.translation_set.get(language_code='cs')
-        self.assertEqual(translation.have_suggestion, 1)
+        self.assertEqual(translation.stats.suggestions, 1)
         profile = Profile.objects.get(user__email=user.email)
         self.assertEqual(profile.suggested, 1)
 

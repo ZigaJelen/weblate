@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -23,8 +23,6 @@ from __future__ import unicode_literals
 from base64 import b64decode
 import subprocess
 import hashlib
-# See https://bitbucket.org/logilab/pylint/issues/73
-# pylint: disable=E0611,F0401
 from distutils.spawn import find_executable
 import os
 from django.utils.translation import ugettext as _
@@ -37,7 +35,6 @@ from weblate.trans.data import data_dir
 KNOWN_HOSTS = 'known_hosts'
 RSA_KEY = 'id_rsa'
 RSA_KEY_PUB = 'id_rsa.pub'
-SSH_WRAPPER = 'ssh-weblate-wrapper'
 
 SSH_WRAPPER_TEMPLATE = r'''#!/bin/sh
 exec ssh \
@@ -47,6 +44,18 @@ exec ssh \
     -o HashKnownHosts=no \
     "$@"
 '''
+
+
+def get_wrapper_filename():
+    """Calculates unique wrapper filename.
+
+    It is based on template and DATA_DIR settings.
+    """
+    md5 = hashlib.md5(SSH_WRAPPER_TEMPLATE.encode('utf-8'))
+    md5.update(data_dir('ssh').encode('utf-8'))
+    return ssh_file('ssh-weblate-wrapper-{0}'.format(
+        md5.hexdigest()
+    ))
 
 
 def ssh_file(filename):
@@ -146,7 +155,7 @@ def add_host_key(request):
     """Add host key for a host."""
     host = request.POST.get('host', '')
     port = request.POST.get('port', '')
-    if len(host) == 0:
+    if not host:
         messages.error(request, _('Invalid host name given!'))
     else:
         cmdline = ['ssh-keyscan']
@@ -178,7 +187,7 @@ def add_host_key(request):
                         'keytype': keytype,
                     }
                 )
-            if len(keys) == 0:
+            if not keys:
                 messages.error(
                     request,
                     _('Failed to fetch public key for a host!')
@@ -205,7 +214,10 @@ def can_generate_key():
 
 def create_ssh_wrapper():
     """Create wrapper for SSH to pass custom known hosts and key."""
-    ssh_wrapper = ssh_file(SSH_WRAPPER)
+    ssh_wrapper = get_wrapper_filename()
+
+    if os.path.exists(ssh_wrapper):
+        return
 
     with open(ssh_wrapper, 'w') as handle:
         handle.write(SSH_WRAPPER_TEMPLATE.format(

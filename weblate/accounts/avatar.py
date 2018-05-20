@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -34,7 +34,7 @@ from django.core.cache import caches, InvalidCacheBackendError
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import pgettext
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 try:
     import libravatar  # pylint: disable=import-error
@@ -86,7 +86,7 @@ def avatar_for_email(email, size=80, skip_cache=False):
         )
 
     # Store result in cache
-    cache.set(cache_key, url)
+    cache.set(cache_key, url, 3600)
 
     return url
 
@@ -192,5 +192,4 @@ def get_user_display(user, icon=True, link=False):
             name=full_name,
             link=reverse('user_page', kwargs={'user': user.username}),
         ))
-    else:
-        return mark_safe(full_name)
+    return mark_safe(full_name)

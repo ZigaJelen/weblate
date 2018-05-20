@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -210,7 +210,7 @@ class PHPFormatCheckTest(CheckTestCase):
     def test_wrong_percent_format(self):
         self.assertTrue(self.check.check_format(
             '%s%% (0.1%%)',
-            '%s%% (0.1%)',
+            '%s%% (0.1%x)',
             False
         ))
 
@@ -303,6 +303,18 @@ class CFormatCheckTest(CheckTestCase):
             'radky: %\'6.3f',
             False
         ))
+
+    def test_ld_format(self):
+        self.assertFalse(self.check.check_format(
+            '%ld bytes (free %ld bytes, used %ld bytes)',
+            '%l octets (%l octets libres, %l octets utilisés)',
+            True
+        ))
+
+    def test_parenthesis(self):
+        self.assertFalse(
+            self.check.check_format('(%.0lf%%)', '(%%%.0lf)', False)
+        )
 
 
 class PerlFormatCheckTest(CFormatCheckTest):

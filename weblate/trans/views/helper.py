@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -36,8 +36,7 @@ def get_translation(request, project, subproject, lang, skip_acl=False):
         Translation.objects.prefetch(),
         language__code=lang,
         subproject__slug=subproject,
-        subproject__project__slug=project,
-        enabled=True
+        subproject__project__slug=project
     )
     if not skip_acl:
         check_access(request, translation.subproject.project)
@@ -95,7 +94,7 @@ def try_set_language(lang):
     try:
         django.utils.translation.activate(lang)
         # workaround for https://code.djangoproject.com/ticket/26050
-        # pylint: disable=W0212
+        # pylint: disable=protected-access
         if trans_real.catalog()._catalog is None:
             raise Exception('Invalid language!')
     except Exception:
@@ -110,18 +109,23 @@ def import_message(request, count, message_none, message_ok):
         messages.success(request, message_ok % count)
 
 
-def download_translation_file(translation, fmt=None):
+def download_translation_file(translation, fmt=None, units=None):
     if fmt is not None:
         try:
             exporter = get_exporter(fmt)(translation=translation)
         except KeyError:
             raise Http404('File format not supported')
-        exporter.add_units(translation)
+        if units is None:
+            units = translation.unit_set.all()
+        exporter.add_units(units)
         return exporter.get_response(
             '{{project}}-{0}-{{language}}.{{extension}}'.format(
                 translation.subproject.slug
             )
         )
+
+    # Force flushing pending units
+    translation.commit_pending(None)
 
     srcfilename = translation.get_filename()
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -27,7 +27,7 @@ from django.utils.translation import ugettext as _, ungettext
 from django.http import JsonResponse
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator, EmptyPage
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.template.loader import render_to_string
 from django.utils.http import urlencode
 from django.views.decorators.cache import never_cache
@@ -37,7 +37,7 @@ from weblate.utils import messages
 from weblate.trans.exporters import get_exporter
 from weblate.trans.models import Translation, Dictionary, Change, Unit
 from weblate.lang.models import Language
-from weblate.trans.site import get_site_url
+from weblate.utils.site import get_site_url
 from weblate.utils.errors import report_error
 from weblate.trans.util import render, redirect_next, redirect_param
 from weblate.trans.forms import WordForm, DictUploadForm, LetterForm

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -20,11 +20,11 @@
 
 from django.http import HttpResponse, Http404
 from django.shortcuts import redirect
-from django.core.urlresolvers import reverse
-from django.views.decorators.vary import vary_on_cookie
-from django.views.decorators.cache import cache_page
+from django.urls import reverse
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
 
-from weblate.trans.site import get_site_url
+from weblate.utils.site import get_site_url
 from weblate.lang.models import Language
 from weblate.trans.forms import EngageForm
 from weblate.trans.models import SubProject
@@ -69,6 +69,9 @@ def widgets(request, project):
         kwargs['lang'] = lang
     engage_url = get_site_url(reverse('engage', kwargs=kwargs))
     engage_url_track = '{0}?utm_source=widget'.format(engage_url)
+    engage_link = mark_safe(
+        '<a href="{0}">{0}</a>'.format(escape(engage_url))
+    )
     widget_base_url = get_site_url(
         reverse('widgets', kwargs={'project': obj.slug})
     )
@@ -104,6 +107,7 @@ def widgets(request, project):
         'widgets.html',
         {
             'engage_url': engage_url,
+            'engage_link': engage_link,
             'engage_url_track': engage_url_track,
             'widget_list': widget_list,
             'widget_base_url': widget_base_url,
@@ -115,8 +119,6 @@ def widgets(request, project):
     )
 
 
-@cache_page(3600)
-@vary_on_cookie
 def render_widget(request, project, widget='287x66', color=None, lang=None,
                   subproject=None, extension='png'):
     # We intentionally skip ACL here to allow widget sharing

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -28,17 +28,20 @@ from six.moves.urllib.parse import urlsplit
 from PIL import Image
 
 from django.test.client import RequestFactory
-from django.contrib.auth.models import Group, User, Permission
-from django.core.urlresolvers import reverse
+from django.contrib.auth.models import Group, Permission
+from django.urls import reverse
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.core.management import call_command
 from django.core import mail
+from django.core.cache import cache
 
 from weblate.lang.models import Language
 from weblate.trans.models import (
     ComponentList, WhiteboardMessage, Project, setup_group_acl,
 )
 from weblate.trans.tests.test_models import RepoTestCase
+from weblate.trans.tests.utils import create_test_user
+from weblate.utils.hash import hash_to_checksum
 from weblate.accounts.models import Profile
 
 
@@ -63,6 +66,12 @@ class RegistrationTestMixin(object):
         # Return confirmation URL
         return line[18:]
 
+    def assert_notify_mailbox(self, sent_mail):
+        self.assertEqual(
+            sent_mail.subject,
+            '[Weblate] Activity on your account at Weblate'
+        )
+
 
 class ViewTestCase(RepoTestCase):
     def setUp(self):
@@ -70,17 +79,14 @@ class ViewTestCase(RepoTestCase):
         # Many tests needs access to the request factory.
         self.factory = RequestFactory()
         # Create user
-        self.user = User.objects.create_user(
-            'testuser',
-            'noreply@weblate.org',
-            'testpassword',
-            first_name='Weblate Test',
-        )
+        self.user = create_test_user()
         group = Group.objects.get(name='Users')
         self.user.groups.add(group)
         # Create project to have some test base
         self.subproject = self.create_subproject()
         self.project = self.subproject.project
+        # Invalidate caches
+        cache.clear()
         # Login
         self.client.login(username='testuser', password='testpassword')
         # Prepopulate kwargs
@@ -143,7 +149,10 @@ class ViewTestCase(RepoTestCase):
         unit = self.get_unit(source)
         params = {
             'checksum': unit.checksum,
+            'contentsum': hash_to_checksum(unit.content_hash),
+            'translationsum': hash_to_checksum(unit.get_target_hash()),
             'target_0': target,
+            'review': '20',
         }
         params.update(kwargs)
         return self.client.post(
@@ -156,7 +165,7 @@ class ViewTestCase(RepoTestCase):
         self.assertEqual(response.status_code, 302)
 
         # We don't use all variables
-        # pylint: disable=W0612
+        # pylint: disable=unused-variable
         scheme, netloc, path, query, fragment = urlsplit(response['Location'])
 
         self.assertEqual(path, exp_path)
@@ -232,7 +241,6 @@ class FixtureTestCase(ViewTestCase):
             call_command(
                 'loaddata', 'simple-project.json',
                 verbosity=0,
-                commit=False,
                 database=db_name
             )
         super(FixtureTestCase, cls).setUpTestData()
@@ -302,13 +310,8 @@ class TranslationManipulationTest(ViewTestCase):
 
 
 class NewLangTest(ViewTestCase):
-    def setUp(self):
-        super(NewLangTest, self).setUp()
-        self.subproject.new_lang = 'add'
-        self.subproject.save()
-
     def create_subproject(self):
-        return self.create_po_new_base()
+        return self.create_po_new_base(new_lang='add')
 
     def test_no_permission(self):
         # Remove permission to add translations
@@ -356,6 +359,8 @@ class NewLangTest(ViewTestCase):
         self.assertContains(response, 'http://example.com/instructions')
 
     def test_contact(self):
+        # Add manager to receive notifications
+        self.make_manager()
         self.subproject.new_lang = 'contact'
         self.subproject.save()
 
@@ -468,6 +473,21 @@ class NewLangTest(ViewTestCase):
             4
         )
 
+    def test_add_rejected(self):
+        self.subproject.project.add_user(self.user, '@Administration')
+        self.subproject.language_regex = '^cs$'
+        self.subproject.save()
+        # One chosen
+        response = self.client.post(
+            reverse('new-language', kwargs=self.kw_subproject),
+            {'lang': 'af'},
+            follow=True
+        )
+        self.assertContains(
+            response,
+            'Given language is filtered by the language filter!',
+        )
+
     def test_remove(self):
         self.test_add_owner()
         kwargs = {'lang': 'af'}
@@ -481,7 +501,7 @@ class NewLangTest(ViewTestCase):
 
 class AndroidNewLangTest(NewLangTest):
     def create_subproject(self):
-        return self.create_android()
+        return self.create_android(new_lang='add')
 
 
 class BasicViewTest(ViewTestCase):
@@ -509,6 +529,15 @@ class BasicViewTest(ViewTestCase):
             unit.get_absolute_url()
         )
         self.assertContains(response, 'Hello, world!')
+
+    def test_view_component_list(self):
+        clist = ComponentList.objects.create(name="TestCL", slug="testcl")
+        clist.components.add(self.subproject)
+        response = self.client.get(
+            reverse('component-list', kwargs={'name': 'testcl'})
+        )
+        self.assertContains(response, 'TestCL')
+        self.assertContains(response, self.subproject.name)
 
 
 class BasicResourceViewTest(BasicViewTest):
@@ -579,12 +608,14 @@ class HomeViewTest(ViewTestCase):
         self.assertNotContains(response, 'whiteboard')
 
     def test_component_list(self):
-        clist = ComponentList(name="TestCL", slug="testcl")
-        clist.save()
+        clist = ComponentList.objects.create(name="TestCL", slug="testcl")
         clist.components.add(self.subproject)
 
         response = self.client.get(reverse('home'))
         self.assertContains(response, 'TestCL')
+        self.assertContains(
+            response, reverse('component-list', kwargs={'name': 'testcl'})
+        )
         self.assertEqual(len(response.context['componentlists']), 1)
 
     def test_user_component_list(self):
@@ -626,6 +657,13 @@ class HomeViewTest(ViewTestCase):
         self.user.profile.subscriptions.add(self.project)
         response = self.client.get(reverse('home'))
         self.assertEqual(len(response.context['usersubscriptions']), 1)
+
+    def test_user_hide_completed(self):
+        self.user.profile.hide_completed = True
+        self.user.profile.save()
+
+        response = self.client.get(reverse('home'))
+        self.assertContains(response, 'Test/Test')
 
 
 class SourceStringsTest(ViewTestCase):

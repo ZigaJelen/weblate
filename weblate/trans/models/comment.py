@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -24,14 +24,14 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils.encoding import python_2_unicode_compatible
 
-from weblate.lang.models import Language
 from weblate.trans.mixins import UserDisplayMixin
 from weblate.trans.models.change import Change
+from weblate.trans.models.unitdata import UnitData
 from weblate.accounts.notifications import notify_new_comment
 
 
 class CommentManager(models.Manager):
-    # pylint: disable=W0232
+    # pylint: disable=no-init
 
     def add(self, unit, user, lang, text):
         """Add comment to this unit."""
@@ -60,12 +60,11 @@ class CommentManager(models.Manager):
 
 
 @python_2_unicode_compatible
-class Comment(models.Model, UserDisplayMixin):
-    content_hash = models.BigIntegerField(db_index=True)
+class Comment(UnitData, UserDisplayMixin):
     comment = models.TextField()
-    user = models.ForeignKey(User, null=True, blank=True)
-    project = models.ForeignKey('Project')
-    language = models.ForeignKey(Language, null=True, blank=True)
+    user = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.deletion.CASCADE
+    )
     timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
 
     objects = CommentManager()
@@ -73,6 +72,9 @@ class Comment(models.Model, UserDisplayMixin):
     class Meta(object):
         ordering = ['timestamp']
         app_label = 'trans'
+        index_together = [
+            ('project', 'language', 'content_hash'),
+        ]
 
     def __str__(self):
         return 'comment for {0} by {1}'.format(

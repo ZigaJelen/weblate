@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -23,6 +23,7 @@ from __future__ import unicode_literals
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator, EmptyPage
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.translation import ugettext as _, ungettext
 from django.views.decorators.cache import never_cache
@@ -31,20 +32,20 @@ from django.views.decorators.http import require_POST
 from weblate.lang.models import Language
 from weblate.permissions.helpers import can_translate
 from weblate.trans.forms import (
-    SiteSearchForm, ReplaceForm, ReplaceConfirmForm,
+    SiteSearchForm, ReplaceForm, ReplaceConfirmForm, MassStateForm,
 )
 from weblate.trans.models import Unit, Change, Project
 from weblate.trans.views.helper import (
     get_translation, get_subproject, get_project, import_message,
 )
 from weblate.trans.util import render
+from weblate.trans.views.helper import show_form_errors
 from weblate.utils import messages
+from weblate.utils.state import STATE_EMPTY
 from weblate.utils.views import get_page_limit
 
 
-@login_required
-@require_POST
-def search_replace(request, project, subproject=None, lang=None):
+def parse_url(request, project, subproject=None, lang=None):
     context = {}
     if subproject is None:
         obj = get_project(request, project)
@@ -68,10 +69,18 @@ def search_replace(request, project, subproject=None, lang=None):
     if not can_translate(request.user, **perms):
         raise PermissionDenied()
 
+    return obj, unit_set, context
+
+@login_required
+@require_POST
+def search_replace(request, project, subproject=None, lang=None):
+    obj, unit_set, context = parse_url(request, project, subproject, lang)
+
     form = ReplaceForm(request.POST)
 
     if not form.is_valid():
         messages.error(request, _('Failed to process form!'))
+        show_form_errors(request, form)
         return redirect(obj)
 
     search_text = form.cleaned_data['search']
@@ -79,10 +88,8 @@ def search_replace(request, project, subproject=None, lang=None):
 
     matching = unit_set.filter(target__contains=search_text)
 
-    if matching.count() == 0:
-        updated = 0
-
-    else:
+    updated = 0
+    if matching.exists():
         confirm = ReplaceConfirmForm(matching, request.POST)
 
         if not confirm.is_valid():
@@ -104,11 +111,20 @@ def search_replace(request, project, subproject=None, lang=None):
             )
 
         matching = confirm.cleaned_data['units']
-        updated = matching.count()
 
-        for unit in matching.iterator():
-            unit.target = unit.target.replace(search_text, replacement)
-            unit.save_backend(request, change_action=Change.ACTION_REPLACE)
+        obj.commit_pending(request)
+
+        with transaction.atomic():
+            for unit in matching.select_for_update():
+                if not can_translate(request.user, unit):
+                    continue
+                unit.translate(
+                    request,
+                    unit.target.replace(search_text, replacement),
+                    unit.state,
+                    change_action=Change.ACTION_REPLACE
+                )
+                updated += 1
 
     import_message(
         request, updated,
@@ -192,3 +208,52 @@ def search(request, project=None, subproject=None, lang=None):
         'search.html',
         context
     )
+
+
+@login_required
+@require_POST
+@never_cache
+def state_change(request, project, subproject=None, lang=None):
+    obj, unit_set, context = parse_url(request, project, subproject, lang)
+
+    form = MassStateForm(request.user, obj, request.POST)
+
+    if not form.is_valid():
+        messages.error(request, _('Failed to process form!'))
+        show_form_errors(request, form)
+        return redirect(obj)
+
+    matching = unit_set.filter_type(
+        form.cleaned_data['type'],
+        context['project'],
+        context['translation'].language if 'translation' in context else None,
+    ).exclude(
+        state=STATE_EMPTY
+    )
+
+    obj.commit_pending(request)
+
+    updated = 0
+    with transaction.atomic():
+        for unit in matching.select_for_update():
+            if not can_translate(request.user, unit):
+                continue
+            unit.translate(
+                request,
+                unit.target,
+                int(form.cleaned_data['state']),
+                change_action=Change.ACTION_MASS_STATE,
+            )
+            updated += 1
+
+    import_message(
+        request, updated,
+        _('Mass state change completed, no strings were updated.'),
+        ungettext(
+            'Mass state change completed, %d string was updated.',
+            'Mass state change completed, %d strings were updated.',
+            updated
+        )
+    )
+
+    return redirect(obj)

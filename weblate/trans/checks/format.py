@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -32,8 +32,8 @@ PYTHON_PRINTF_MATCH = re.compile(
         [+#-]*                  # flags
         (?:\d+)?                # width
         (?:\.\d+)?              # precision
-        (hh\|h\|l\|ll)?         # length formatting
-        (?P<type>.))        # type (%s, %d, etc.)
+        (hh|h|l|ll)?         # length formatting
+        (?P<type>[a-zA-Z%]))        # type (%s, %d, etc.)
     )''',
     re.VERBOSE
 )
@@ -47,8 +47,8 @@ PHP_PRINTF_MATCH = re.compile(
         [+#-]*                  # flags
         (?:\d+)?                # width
         (?:\.\d+)?              # precision
-        (hh\|h\|l\|ll)?         # length formatting
-        (?P<type>.))        # type (%s, %d, etc.)
+        (hh|h|l|ll)?         # length formatting
+        (?P<type>[a-zA-Z%]))        # type (%s, %d, etc.)
     )''',
     re.VERBOSE
 )
@@ -59,11 +59,11 @@ C_PRINTF_MATCH = re.compile(
     %(                          # initial %
           (?:(?P<ord>\d+)\$)?   # variable order, like %1$s
     (?P<fullvar>
-        [+#-']*                 # flags
+        [+#'-]*                 # flags
         (?:\d+)?                # width
         (?:\.\d+)?              # precision
-        (hh\|h\|l\|ll)?         # length formatting
-        (?P<type>.))        # type (%s, %d, etc.)
+        (hh|h|l|ll)?         # length formatting
+        (?P<type>[a-zA-Z%]))        # type (%s, %d, etc.)
     )''',
     re.VERBOSE
 )
@@ -152,7 +152,7 @@ class BaseFormatCheck(TargetCheck):
 
     def check_format(self, source, target, ignore_missing):
         """Generic checker for format strings."""
-        if len(target) == 0 or len(source) == 0:
+        if not target or not source:
             return False
 
         uses_position = True

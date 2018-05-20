@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -54,17 +54,18 @@ from weblate.permissions.models import AutoGroup, GroupACL
 from weblate.screenshots.admin import ScreenshotAdmin
 from weblate.screenshots.models import Screenshot
 from weblate.trans.admin import (
-    ProjectAdmin, SubProjectAdmin, TranslationAdmin, AdvertisementAdmin,
+    ProjectAdmin, SubProjectAdmin, TranslationAdmin,
     UnitAdmin, SuggestionAdmin, CommentAdmin, CheckAdmin, DictionaryAdmin,
     ChangeAdmin, SourceAdmin, WhiteboardMessageAdmin, ComponentListAdmin,
 )
 from weblate.trans.models import (
-    Project, SubProject, Translation, Advertisement,
+    Project, SubProject, Translation,
     Unit, Suggestion, Comment, Check, Dictionary, Change,
     Source, WhiteboardMessage, ComponentList,
 )
 from weblate.utils import messages
 import weblate.wladmin.views
+from weblate.wladmin.models import ConfigurationError
 
 
 class WeblateAdminSite(AdminSite):
@@ -95,7 +96,6 @@ class WeblateAdminSite(AdminSite):
         # Transaltions
         self.register(Project, ProjectAdmin)
         self.register(SubProject, SubProjectAdmin)
-        self.register(Advertisement, AdvertisementAdmin)
         self.register(WhiteboardMessage, WhiteboardMessageAdmin)
         self.register(ComponentList, ComponentListAdmin)
 
@@ -112,7 +112,7 @@ class WeblateAdminSite(AdminSite):
 
         # Billing
         if 'weblate.billing' in settings.INSTALLED_APPS:
-            # pylint: disable=C0413
+            # pylint: disable=wrong-import-position
             from weblate.billing.admin import (
                 PlanAdmin, BillingAdmin, InvoiceAdmin,
             )
@@ -123,7 +123,7 @@ class WeblateAdminSite(AdminSite):
 
         # Legal
         if 'weblate.legal' in settings.INSTALLED_APPS:
-            # pylint: disable=C0413
+            # pylint: disable=wrong-import-position
             from weblate.legal.admin import AgreementAdmin
             from weblate.legal.models import Agreement
             self.register(Agreement, AgreementAdmin)
@@ -153,6 +153,9 @@ class WeblateAdminSite(AdminSite):
         empty = [_('Object listing disabled')]
         result['empty_selectable_objects_list'] = [empty]
         result['empty_objects_list'] = empty
+        result['configuration_errors'] = ConfigurationError.objects.filter(
+            ignored=False
+        )
         return result
 
     def get_urls(self):
@@ -182,6 +185,10 @@ class WeblateAdminSite(AdminSite):
             ),
         ]
         return urls
+
+    @property
+    def urls(self):
+        return self.get_urls()
 
 
 SITE = WeblateAdminSite()

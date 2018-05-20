@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -43,11 +43,12 @@ class WhiteboardManager(models.Manager):
                 return base.filter(
                     Q(language=language) |
                     Q(subproject=subproject) |
-                    Q(project=subproject.project)
+                    (Q(project=subproject.project) & Q(subproject=None))
                 )
 
             return base.filter(
-                Q(subproject=subproject) | Q(project=subproject.project)
+                Q(subproject=subproject) |
+                (Q(project=subproject.project) & Q(subproject=None))
             )
 
         if project:
@@ -64,24 +65,36 @@ class WhiteboardMessage(models.Model):
     message = models.TextField(
         verbose_name=ugettext_lazy('Message'),
     )
+    message_html = models.BooleanField(
+        verbose_name=ugettext_lazy('Render as HTML'),
+        help_text=ugettext_lazy(
+            'When disabled, URLs will be converted to links and '
+            'any markup will be escaped.'
+        ),
+        blank=True,
+        default=False,
+    )
 
     project = models.ForeignKey(
         'Project',
         verbose_name=ugettext_lazy('Project'),
         null=True,
         blank=True,
+        on_delete=models.deletion.CASCADE,
     )
     subproject = models.ForeignKey(
         'SubProject',
         verbose_name=ugettext_lazy('Component'),
         null=True,
-        blank=True
+        blank=True,
+        on_delete=models.deletion.CASCADE,
     )
     language = models.ForeignKey(
         Language,
         verbose_name=ugettext_lazy('Language'),
         null=True,
-        blank=True
+        blank=True,
+        on_delete=models.deletion.CASCADE,
     )
     category = models.CharField(
         max_length=25,

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -27,9 +27,8 @@ from base64 import b64encode
 from six.moves.http_client import HTTPConnection
 import django
 from django.test.utils import override_settings
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.core import mail
-from django.contrib.auth.models import User
 try:
     from selenium import webdriver
     from selenium.common.exceptions import (
@@ -41,6 +40,7 @@ except ImportError:
 
 from weblate.trans.tests.test_views import RegistrationTestMixin
 from weblate.trans.tests.test_models import BaseLiveServerTestCase
+from weblate.trans.tests.utils import create_test_user
 
 # Check whether we should run Selenium tests
 DO_SELENIUM = (
@@ -172,12 +172,7 @@ class SeleniumTests(BaseLiveServerTestCase, RegistrationTestMixin):
         self.driver.find_element_by_id('id_username')
 
         # Do proper login with new user
-        User.objects.create_user(
-            'testuser',
-            'noreply@weblate.org',
-            'testpassword',
-            first_name='Test User',
-        )
+        create_test_user()
         password_input = self.driver.find_element_by_id('id_password')
         password_input.send_keys('testpassword')
         self.click(
@@ -238,7 +233,7 @@ class SeleniumTests(BaseLiveServerTestCase, RegistrationTestMixin):
 
         # Wait for registration email
         loops = 0
-        while len(mail.outbox) == 0:
+        while not mail.outbox:
             time.sleep(1)
             loops += 1
             if loops > 20:
@@ -287,12 +282,7 @@ class SeleniumTests(BaseLiveServerTestCase, RegistrationTestMixin):
 EXTRA_PLATFORMS = {
     'Chrome': {
         'browserName': 'chrome',
-        'platform': 'XP',
-    },
-    'Android': {
-        'browserName': 'android',
-        'deviceName': 'Android Emulator',
-        'device-orientation': 'portrait',
+        'platform': 'Windows 10',
     },
 }
 

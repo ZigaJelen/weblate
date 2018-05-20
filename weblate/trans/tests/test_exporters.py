@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -20,7 +20,7 @@
 
 from django.test import TestCase
 
-from weblate.lang.models import Language
+from weblate.lang.models import Language, Plural
 from weblate.trans.exporters import (
     PoExporter, PoXliffExporter, XliffExporter, TBXExporter, MoExporter,
     CSVExporter,
@@ -28,6 +28,7 @@ from weblate.trans.exporters import (
 from weblate.trans.models import (
     Dictionary, Project, SubProject, Translation, Unit,
 )
+from weblate.utils.state import STATE_TRANSLATED, STATE_EMPTY
 
 
 class PoExporterTest(TestCase):
@@ -36,7 +37,9 @@ class PoExporterTest(TestCase):
 
     def get_exporter(self, lang=None):
         if lang is None:
-            lang = Language(code='xx')
+            lang, created = Language.objects.get_or_create(code='xx')
+            if created:
+                Plural.objects.create(language=lang)
         return self._class(
             language=lang,
             project=Project(slug='test', name='TEST'),
@@ -70,10 +73,13 @@ class PoExporterTest(TestCase):
             equation = 'n==0 ? 0 : n==1 ? 1 : 2'
         else:
             equation = '0'
-        lang = Language(
+        lang = Language.objects.create(
             code='zz',
-            nplurals=nplurals,
-            pluralequation=equation
+        )
+        plural = Plural.objects.create(
+            language=lang,
+            number=nplurals,
+            equation=equation
         )
         project = Project(
             slug='test',
@@ -83,7 +89,8 @@ class PoExporterTest(TestCase):
         unit = Unit(
             translation=Translation(
                 language=lang,
-                subproject=subproject
+                subproject=subproject,
+                plural=plural,
             ),
             **kwargs
         )
@@ -101,7 +108,7 @@ class PoExporterTest(TestCase):
         result = self.check_unit(
             source='xxx\x1e\x1efff',
             target='yyy\x1e\x1efff\x1e\x1ewww',
-            translated=True,
+            state=STATE_TRANSLATED,
         )
         self.check_plurals(result)
 
@@ -110,7 +117,7 @@ class PoExporterTest(TestCase):
             nplurals=1,
             source='xxx\x1e\x1efff',
             target='yyy',
-            translated=True,
+            state=STATE_TRANSLATED,
         )
 
     def test_unit_not_translated(self):
@@ -118,7 +125,7 @@ class PoExporterTest(TestCase):
             nplurals=1,
             source='xxx\x1e\x1efff',
             target='yyy',
-            translated=False,
+            state=STATE_EMPTY,
         )
 
     def test_context(self):
@@ -126,7 +133,7 @@ class PoExporterTest(TestCase):
             source='foo',
             target='bar',
             context='context',
-            translated=True,
+            state=STATE_TRANSLATED,
         )
         if self._has_context:
             self.assertIn(b'context', result)
@@ -154,7 +161,7 @@ class PoExporterTest(TestCase):
 
 class PoXliffExporterTest(PoExporterTest):
     _class = PoXliffExporter
-    _has_context = False
+    _has_context = True
 
     def check_plurals(self, result):
         self.assertIn(b'[2]', result)
@@ -162,7 +169,7 @@ class PoXliffExporterTest(PoExporterTest):
 
 class XliffExporterTest(PoExporterTest):
     _class = XliffExporter
-    _has_context = False
+    _has_context = True
 
     def check_plurals(self, result):
         # Doesn't support plurals

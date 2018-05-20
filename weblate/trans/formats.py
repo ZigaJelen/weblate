@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -21,31 +21,34 @@
 
 from __future__ import unicode_literals
 
-from io import BytesIO
-import os.path
-import inspect
-import re
 import csv
-import traceback
 import importlib
+import inspect
+from io import BytesIO
+import os
+import re
+import sys
+import tempfile
+import traceback
 
 
 from django.utils.translation import ugettext_lazy as _
 
 import six
 
-from translate.convert import po2php
 from translate.misc import quote
+from translate.misc.multistring import multistring
 from translate.storage.lisa import LISAfile
-from translate.storage.php import phpunit, phpfile
 from translate.storage.po import pounit, pofile
 from translate.storage.poheader import default_header
 from translate.storage.properties import propunit, propfile
-from translate.storage.ts2 import tsfile
+from translate.storage.ts2 import tsfile, tsunit
 from translate.storage.xliff import xlifffile, ID_SEPARATOR
 from translate.storage.poxliff import PoXliffFile
 from translate.storage.resx import RESXFile
 from translate.storage import factory
+
+from weblate.lang.models import Plural
 
 from weblate.trans.util import get_string, join_plural, add_configuration_error
 
@@ -58,6 +61,26 @@ FILE_FORMATS = {}
 FILE_DETECT = []
 FLAGS_RE = re.compile(r'\b[-\w:]+\b')
 LOCATIONS_RE = re.compile(r'^([+-]|.*, [+-]|.*:[+-])')
+SUPPORTS_FUZZY = (pounit, tsunit)
+
+
+def move_atomic(source, target):
+    """Tries to perform atomic move.
+
+    This is tricky on Windows as until Python 3.3 there is no
+    function for that. And even on Python 3.3 the MoveFileEx
+    is not guarateed to be atomic, so it might fail in some cases.
+    Anyway we try to choose best available method.
+    """
+    # Use os.replace if available
+    if sys.version_info >= (3, 3):
+        os.replace(source, target)
+    else:
+        # Remove target on Windows if exists
+        if sys.platform == 'win32' and os.path.exists(target):
+            os.unlink(target)
+        # Use os.rename
+        os.rename(source, target)
 
 
 class ParseError(Exception):
@@ -109,10 +132,15 @@ def try_load(filename, content, original_format, template_store):
     for file_format in formats:
         if file_format.monolingual in (True, None) and template_store:
             try:
-                return file_format.parse(
+                result = file_format.parse(
                     StringIOMode(filename, content),
                     template_store
                 )
+                # Skip if there is not translated unit
+                # this can easily happen when importing bilingual
+                # storage which can be monolingual as well
+                if list(result.iterate_merge(False)):
+                    return result
             except Exception as error:
                 failure = error
         if file_format.monolingual in (False, None):
@@ -145,17 +173,11 @@ class FileUnit(object):
         """Return comma separated list of locations."""
         # JSON, XLIFF and PHP are special in ttkit - it uses locations for what
         # is context in other formats
-        if (isinstance(self.mainunit, propunit) or
-                isinstance(self.mainunit, phpunit)):
+        if isinstance(self.mainunit, propunit):
             return ''
-        result = ', '.join(
+        return ', '.join(
             [x for x in self.mainunit.getlocations() if x is not None]
         )
-        # Do not try to handle relative locations in Qt TS, see
-        # http://qt-project.org/doc/qt-4.8/linguist-ts-file-format.html
-        if LOCATIONS_RE.match(result):
-            return ''
-        return result
 
     def reformat_flags(self, typecomments):
         """Processe flags from PO file to nicer form."""
@@ -177,8 +199,7 @@ class FileUnit(object):
             return self.reformat_flags(self.unit.typecomments)
         elif hasattr(self.template, 'typecomments'):
             return self.reformat_flags(self.template.typecomments)
-        else:
-            return ''
+        return ''
 
     def get_comments(self):
         """Return comments (notes) from units."""
@@ -195,42 +216,39 @@ class FileUnit(object):
 
         return comment
 
-    def is_unit_key_value(self):
+    def is_unit_key_value(self, unit):
         """Check whether unit is key = value based rather than translation.
 
         These are some files like PHP or properties, which for some
         reason do not correctly set source/target attributes.
         """
         return (
-            hasattr(self.mainunit, 'name') and
-            hasattr(self.mainunit, 'value') and
-            hasattr(self.mainunit, 'translation')
+            hasattr(unit, 'name') and
+            hasattr(unit, 'value') and
+            hasattr(unit, 'translation')
         )
 
     def get_source(self):
         """Return source string from a ttkit unit."""
-        if self.is_unit_key_value():
+        if self.is_unit_key_value(self.mainunit):
             # Need to decode property encoded string
             if isinstance(self.mainunit, propunit):
                 if self.template is not None:
                     return quote.propertiesdecode(self.template.value)
-                else:
-                    return quote.propertiesdecode(self.unit.name)
+                return quote.propertiesdecode(self.unit.name)
             if self.template is not None:
                 return self.template.value
-            else:
-                return self.unit.name
+            return self.unit.name
         else:
             if self.template is not None:
                 return get_string(self.template.target)
-            else:
-                return get_string(self.unit.source)
+            return get_string(self.unit.source)
 
     def get_target(self):
         """Return target string from a ttkit unit."""
         if self.unit is None:
             return ''
-        if self.is_unit_key_value():
+        if self.is_unit_key_value(self.unit):
             # Need to decode property encoded string
             if isinstance(self.unit, propunit):
                 # This is basically stolen from
@@ -240,8 +258,7 @@ class FileUnit(object):
                 value = re.sub('\\\\ ', ' ', value)
                 return value
             return self.unit.value
-        else:
-            return get_string(self.unit.target)
+        return get_string(self.unit.target)
 
     def get_context(self):
         """Return context of message.
@@ -253,7 +270,7 @@ class FileUnit(object):
             return self.template.getid()
         else:
             context = self.mainunit.getcontext()
-        if self.is_unit_key_value() and context == '':
+        if self.is_unit_key_value(self.mainunit) and context == '':
             return self.mainunit.getid()
         return context
 
@@ -298,16 +315,27 @@ class FileUnit(object):
             return False
         # The hasattr check here is needed for merged storages
         # where template is different kind than translations
-        if self.is_unit_key_value() and hasattr(self.unit, 'value'):
+        if self.is_unit_key_value(self.unit) and hasattr(self.unit, 'value'):
             return not self.unit.isfuzzy() and self.unit.value != ''
-        else:
-            return self.unit.istranslated()
+        return self.unit.istranslated()
 
-    def is_fuzzy(self):
-        """Check whether unit is translated."""
+    def is_approved(self, fallback=False):
+        """Check whether unit is appoved."""
         if self.unit is None:
-            return False
-        return self.unit.isfuzzy()
+            return fallback
+        if hasattr(self.unit, 'isapproved'):
+            return self.unit.isapproved()
+        return fallback
+
+    def is_fuzzy(self, fallback=False):
+        """Check whether unit needs edit."""
+        if self.unit is None:
+            return fallback
+        # Most of the formats do not support this, but they
+        # happily return False
+        if isinstance(self.unit, SUPPORTS_FUZZY):
+            return self.unit.isfuzzy()
+        return fallback
 
     def is_obsolete(self):
         """Check whether unit is marked as obsolete in backend."""
@@ -323,14 +351,21 @@ class FileUnit(object):
 
     def set_target(self, target):
         """Set translation unit target."""
+        if isinstance(target, list):
+            target = multistring(target)
         self.unit.settarget(target)
         # Propagate to value so that is_translated works correctly
-        if self.is_unit_key_value():
+        if self.is_unit_key_value(self.unit):
             self.unit.value = self.unit.translation
 
     def mark_fuzzy(self, fuzzy):
         """Set fuzzy flag on translated unit."""
         self.unit.markfuzzy(fuzzy)
+
+    def mark_approved(self, value):
+        """Set approved flag on translated unit."""
+        if hasattr(self.unit, 'markapproved'):
+            self.unit.markapproved(value)
 
 
 class PoUnit(FileUnit):
@@ -339,7 +374,8 @@ class PoUnit(FileUnit):
         """Set fuzzy flag on translated unit."""
         super(PoUnit, self).mark_fuzzy(fuzzy)
         if not fuzzy:
-            self.unit.prev_source = ''
+            self.unit.prev_msgid = []
+            self.unit.prev_msgid_plural = []
             self.unit.prev_msgctxt = []
 
 
@@ -350,18 +386,9 @@ class XliffUnit(FileUnit):
     is context in other formats.
     """
 
-    @staticmethod
-    def get_unit_context(unit):
-        return unit.getid().replace(ID_SEPARATOR, '///')
-
     def get_context(self):
-        """Return context of message.
-
-        In some cases we have to use ID here to make all backends consistent.
-        """
-        if self.template is not None:
-            return self.template.source
-        return self.get_unit_context(self.mainunit)
+        """Return context of message."""
+        return self.mainunit.getid().replace(ID_SEPARATOR, '///')
 
     def get_locations(self):
         """Return comma separated list of locations."""
@@ -383,13 +410,36 @@ class XliffUnit(FileUnit):
 
         return ''
 
+    def is_translated(self):
+        """Check whether unit is translated.
+
+        We replace translate-toolkit logic here as the isfuzzy
+        is pretty much wrong there, see is_fuzzy docs.
+        """
+        if self.unit is None:
+            return False
+        return bool(self.unit.target)
+
+    def is_fuzzy(self, fallback=False):
+        """Check whether unit needs edit.
+
+        The isfuzzy on Xliff is really messing up approved flag with fuzzy
+        and leading to various problems. That's why we completely ignore it.
+        """
+        return fallback
+
+    def mark_fuzzy(self, fuzzy):
+        """Set fuzzy flag on translated unit.
+
+        We ignore this for now."""
+        return
+
 
 class MonolingualIDUnit(FileUnit):
     def get_context(self):
         if self.template is not None:
             return self.template.getid()
-        else:
-            return self.mainunit.getcontext()
+        return self.mainunit.getcontext()
 
 
 class TSUnit(MonolingualIDUnit):
@@ -403,6 +453,15 @@ class TSUnit(MonolingualIDUnit):
                 source.replace('(s)', 's'),
             ])
         return super(TSUnit, self).get_source()
+
+    def get_locations(self):
+        """Return comma separated list of locations."""
+        result = super(TSUnit, self).get_locations()
+        # Do not try to handle relative locations in Qt TS, see
+        # http://doc.qt.io/qt-5/linguist-ts-file-format.html
+        if LOCATIONS_RE.match(result):
+            return ''
+        return result
 
     def get_target(self):
         """Return target string from a ttkit unit."""
@@ -444,8 +503,7 @@ class CSVUnit(MonolingualSimpleUnit):
             elif self.template.context:
                 return self.template.context
             return self.template.getid()
-        else:
-            return self.mainunit.getcontext()
+        return self.mainunit.getcontext()
 
     def get_source(self):
         # Needed to avoid translate-toolkit construct ID
@@ -462,8 +520,7 @@ class RESXUnit(FileUnit):
     def get_context(self):
         if self.template is not None:
             return self.template.getid()
-        else:
-            return self.unit.getid()
+        return self.unit.getid()
 
     def get_source(self):
         if self.template is None:
@@ -496,7 +553,6 @@ class FileFormat(object):
     unit_class = FileUnit
     new_translation = None
     autoload = ()
-    language_pack = None
 
     @staticmethod
     def serialize(store):
@@ -566,6 +622,10 @@ class FileFormat(object):
                 self.store.gettargetlanguage() is None):
             self.store.settargetlanguage(language_code)
 
+    def get_plural(self, language):
+        """Return matching plural object."""
+        return language.plural
+
     @property
     def has_template(self):
         """Check whether class is using template."""
@@ -585,6 +645,8 @@ class FileFormat(object):
         for search_unit in store.units:
             if search_unit.getid() == context:
                 return search_unit
+
+        return None
 
     def _find_unit_template(self, context):
         # Need to create new unit based on template
@@ -611,7 +673,7 @@ class FileFormat(object):
         # Find all units with same source
         found_units = self.store.findunits(source)
         # Find is broken for propfile, ignore results
-        if len(found_units) > 0 and not isinstance(self.store, propfile):
+        if found_units and not isinstance(self.store, propfile):
             for ttkit_unit in found_units:
                 # Does context match?
                 if ttkit_unit.getcontext() == context:
@@ -632,16 +694,15 @@ class FileFormat(object):
         """
         if self.has_template:
             return self._find_unit_template(context)
-        else:
-            return self._find_unit_bilingual(context, source)
+        return self._find_unit_bilingual(context, source)
 
     def add_unit(self, ttkit_unit):
         """Add new unit to underlaying store."""
         if isinstance(self.store, LISAfile):
             # LISA based stores need to know this
-            self.store.addunit(ttkit_unit.unit, new=True)
+            self.store.addunit(ttkit_unit, new=True)
         else:
-            self.store.addunit(ttkit_unit.unit)
+            self.store.addunit(ttkit_unit)
 
     def update_header(self, **kwargs):
         """Update store header if available."""
@@ -661,8 +722,17 @@ class FileFormat(object):
 
     def save(self):
         """Save underlaying store to disk."""
-        with open(self.storefile, 'wb') as handle:
-            self.store.serialize(handle)
+        dirname, basename = os.path.split(self.storefile)
+        temp = tempfile.NamedTemporaryFile(
+            prefix=basename, dir=dirname, delete=False
+        )
+        try:
+            self.store.serialize(temp)
+            temp.close()
+            move_atomic(temp.name, self.storefile)
+        finally:
+            if os.path.exists(temp.name):
+                os.unlink(temp.name)
 
     def find_matching(self, template_unit):
         """Find matching store unit for template"""
@@ -688,8 +758,7 @@ class FileFormat(object):
         """Return count of units."""
         if not self.has_template:
             return len(self.store.units)
-        else:
-            return len(self.template_store.store.units)
+        return len(self.template_store.store.units)
 
     @property
     def mimetype(self):
@@ -697,16 +766,14 @@ class FileFormat(object):
         if self.store.Mimetypes is None:
             # Properties files do not expose mimetype
             return 'text/plain'
-        else:
-            return self.store.Mimetypes[0]
+        return self.store.Mimetypes[0]
 
     @property
     def extension(self):
         """Return most common file extension for format."""
         if self.store.Extensions is None:
             return 'txt'
-        else:
-            return self.store.Extensions[0]
+        return self.store.Extensions[0]
 
     @classmethod
     def is_valid(cls, store):
@@ -718,24 +785,25 @@ class FileFormat(object):
         if store is None:
             return False
 
-        if cls.monolingual is False and cls.serialize(store) == b'':
+        if cls.monolingual is False and not store.units:
             return False
 
         return True
 
     @classmethod
-    def supports_new_language(cls):
-        """Whether it supports creating new translation."""
-        return cls.new_translation is not None
-
-    @classmethod
     def is_valid_base_for_new(cls, base):
         """Check whether base is valid."""
-        return True
+        if not base:
+            return cls.new_translation is not None
+        try:
+            cls.parse_store(base)
+            return True
+        except Exception:
+            return False
 
     @staticmethod
     def get_language_code(code):
-        """Doe any possible formatting needed for language code."""
+        """Do any possible formatting needed for language code."""
         return code
 
     @classmethod
@@ -759,11 +827,16 @@ class FileFormat(object):
     @classmethod
     def create_new_file(cls, filename, language, base):
         """Handle creation of new translation file."""
-        if cls.new_translation is None:
+        if base:
+            # Parse file
+            store = cls.parse_store(base)
+            cls.untranslate_store(store, language)
+            store.savefile(filename)
+        elif cls.new_translation is None:
             raise ValueError('Not supported')
-
-        with open(filename, 'w') as output:
-            output.write(cls.new_translation)
+        else:
+            with open(filename, 'w') as output:
+                output.write(cls.new_translation)
 
     def iterate_merge(self, fuzzy):
         """Iterate over units for merging.
@@ -795,18 +868,36 @@ class FileFormat(object):
         """Try to merge headers"""
         return
 
-    @staticmethod
-    def untranslate_store(store, language, fuzzy=False):
+    @classmethod
+    def untranslate_store(cls, store, language, fuzzy=False):
         """Remove translations from ttkit store"""
         store.settargetlanguage(language.code)
+        plural = language.plural
 
         for unit in store.units:
             if unit.istranslatable():
-                unit.markfuzzy(fuzzy)
+                if hasattr(unit, 'markapproved'):
+                    # Xliff only
+                    unit.markapproved(not fuzzy)
+                else:
+                    unit.markfuzzy(fuzzy)
                 if unit.hasplural():
-                    unit.settarget([''] * language.nplurals)
+                    unit.settarget([''] * plural.number)
                 else:
                     unit.settarget('')
+
+    def create_unit(self, key, source):
+        unit = self.store.UnitClass(source)
+        unit.setid(key)
+        unit.source = key
+        unit.target = source
+        return unit
+
+    def new_unit(self, key, source):
+        """Add new unit to monolingual store."""
+        unit = self.create_unit(key, source)
+        self.add_unit(unit)
+        self.save()
 
 
 @register_fileformat
@@ -847,13 +938,7 @@ class PoFormat(FileFormat):
     loader = pofile
     monolingual = False
     autoload = ('.po', '.pot')
-    language_pack = 'mo'
     unit_class = PoUnit
-
-    @classmethod
-    def supports_new_language(cls):
-        """Check whether we can create new language file."""
-        return True
 
     @classmethod
     def is_valid_base_for_new(cls, base):
@@ -864,20 +949,38 @@ class PoFormat(FileFormat):
         except Exception:
             return False
 
-    @classmethod
-    def create_new_file(cls, filename, language, base):
-        """Handle creation of new translation file."""
-        store = pofile.parsefile(base)
+    def get_plural(self, language):
+        """Return matching plural object."""
+        header = self.store.parseheader()
+        try:
+            number, equation = Plural.parse_formula(header['Plural-Forms'])
+        except (ValueError, KeyError):
+            return super(PoFormat, self).get_plural(language)
 
-        cls.untranslate_store(store, language)
+        # Find matching one
+        for plural in language.plural_set.all():
+            if plural.same_plural(number, equation):
+                return plural
+
+        # Create new one
+        return Plural.objects.create(
+            language=language,
+            source=Plural.SOURCE_GETTEXT,
+            number=number,
+            equation=equation,
+        )
+
+    @classmethod
+    def untranslate_store(cls, store, language, fuzzy=False):
+        """Remove translations from ttkit store"""
+        super(PoFormat, cls).untranslate_store(store, language, fuzzy)
+        plural = language.plural
 
         store.updateheader(
             last_translator='Automatically generated',
-            plural_forms=language.get_plural_form(),
+            plural_forms=plural.plural_form,
             language_team='none',
         )
-
-        store.savefile(filename)
 
     def merge_header(self, otherstore):
         """Try to merge headers"""
@@ -927,19 +1030,6 @@ class TSFormat(FileFormat):
     unit_class = TSUnit
 
     @classmethod
-    def supports_new_language(cls):
-        """Check whether we can create new language file."""
-        return True
-
-    @classmethod
-    def create_new_file(cls, filename, language, base):
-        store = tsfile.parsefile(base)
-
-        cls.untranslate_store(store, language, True)
-
-        store.savefile(filename)
-
-    @classmethod
     def is_valid_base_for_new(cls, base):
         """Check whether base is valid."""
         try:
@@ -964,21 +1054,16 @@ class XliffFormat(FileFormat):
             self.store
         )
 
-    def _find_unit_bilingual(self, context, source):
-        # Find all units with same source
-        found_units = self.store.findunits(source)
-        # Find is broken for propfile, ignore results
-        for ttkit_unit in found_units:
-            # Does context match?
-            found_context = XliffUnit.get_unit_context(ttkit_unit)
-            if found_context == context:
-                return (self.unit_class(ttkit_unit), False)
-        return (None, False)
+    def find_unit(self, context, source):
+        return super(XliffFormat, self).find_unit(
+            context.replace('///', ID_SEPARATOR), source
+        )
 
-    @classmethod
-    def supports_new_language(cls):
-        """Check whether we can create new language file."""
-        return True
+    def _find_unit_bilingual(self, context, source):
+        return (
+            self.unit_class(self._find_unit_mono(context, self.store)),
+            False
+        )
 
     @classmethod
     def is_valid_base_for_new(cls, base):
@@ -988,20 +1073,6 @@ class XliffFormat(FileFormat):
             return True
         except Exception:
             return False
-
-    @classmethod
-    def create_new_file(cls, filename, language, base):
-        """Handle creation of new translation file."""
-        content = cls.loader.parsefile(base)
-        content.settargetlanguage(language.code)
-        content.savefile(filename)
-
-    def _find_unit_mono(self, context, store):
-        # Do not use findid as it does not work for empty translations
-        for search_unit in store.units:
-            loc = search_unit.source
-            if loc == context:
-                return search_unit
 
 
 @register_fileformat
@@ -1020,9 +1091,14 @@ class StringsFormat(FileFormat):
     new_translation = '\n'.encode('utf-16')
     autoload = ('.strings',)
 
+    @staticmethod
+    def get_language_code(code):
+        """Do any possible formatting needed for language code."""
+        return code.replace('_', '-')
+
 
 @register_fileformat
-class StringsUtf8Format(FileFormat):
+class StringsUtf8Format(StringsFormat):
     name = _('OS X Strings (UTF-8)')
     format_id = 'strings-utf8'
     loader = ('properties', 'stringsutf8file')
@@ -1081,7 +1157,7 @@ class JoomlaFormat(FileFormat):
 class PhpFormat(FileFormat):
     name = _('PHP strings')
     format_id = 'php'
-    loader = phpfile
+    loader = ('php', 'phpfile')
     new_translation = '<?php\n'
     autoload = ('.php',)
     unit_class = PHPUnit
@@ -1095,20 +1171,6 @@ class PhpFormat(FileFormat):
     def extension(self):
         """Return most common file extension for format."""
         return 'php'
-
-    def save(self):
-        """Save underlaying store to disk.
-
-        This is workaround for .save() not working as intended in
-        translate-toolkit.
-        """
-        with open(self.store.filename, 'rb') as handle:
-            convertor = po2php.rephp(handle, self.store)
-
-            outputphplines = convertor.convertstore(False)
-
-        with open(self.store.filename, 'wb') as handle:
-            handle.writelines(outputphplines)
 
 
 @register_fileformat
@@ -1143,8 +1205,8 @@ class AndroidFormat(FileFormat):
 
     @staticmethod
     def get_language_code(code):
-        """Doe any possible formatting needed for language code."""
-        # Android doesn't use Hans/Hant, but rahter TW/CN variants
+        """Do any possible formatting needed for language code."""
+        # Android doesn't use Hans/Hant, but rather TW/CN variants
         if code == 'zh_Hans':
             return 'zh-rCN'
         elif code == 'zh_Hant':
@@ -1159,21 +1221,7 @@ class JSONFormat(FileFormat):
     loader = ('jsonl10n', 'JsonFile')
     unit_class = MonolingualSimpleUnit
     autoload = ('.json',)
-
-    @classmethod
-    def supports_new_language(cls):
-        """Check whether we can create new language file."""
-        return True
-
-    @classmethod
-    def create_new_file(cls, filename, language, base):
-        """Handle creation of new translation file."""
-        content = b'{}\n'
-        if base:
-            with open(base, 'rb') as handle:
-                content = handle.read()
-        with open(filename, 'wb') as output:
-            output.write(content)
+    new_translation = '{}\n'
 
     @property
     def mimetype(self):
@@ -1331,25 +1379,7 @@ class YAMLFormat(FileFormat):
     loader = ('yaml', 'YAMLFile')
     unit_class = MonolingualSimpleUnit
     autoload = ('.pyml',)
-
-    @classmethod
-    def supports_new_language(cls):
-        """Check whether we can create new language file."""
-        return True
-
-    @classmethod
-    def create_new_file(cls, filename, language, base):
-        """Handle creation of new translation file."""
-        if base:
-            storeclass = cls.get_class()
-
-            # Parse file
-            store = storeclass.parsefile(base)
-            cls.untranslate_store(store, language)
-            store.savefile(filename)
-        else:
-            with open(filename, 'wb') as output:
-                output.write(b'{}\n')
+    new_translation = '{}\n'
 
     @property
     def mimetype(self):
@@ -1368,6 +1398,33 @@ class RubyYAMLFormat(YAMLFormat):
     format_id = 'ruby-yaml'
     loader = ('yaml', 'RubyYAMLFile')
     autoload = ('.ryml', '.yml', '.yaml')
+
+
+@register_fileformat
+class DTDFormat(FileFormat):
+    name = _('DTD file')
+    format_id = 'dtd'
+    loader = ('dtd', 'dtdfile')
+    autoload = ('.dtd',)
+    unit_class = MonolingualSimpleUnit
+    new_translation = '\n'
+
+    @property
+    def mimetype(self):
+        """Return most common mime type for format."""
+        return 'application/xml-dtd'
+
+    @property
+    def extension(self):
+        """Return most common file extension for format."""
+        return 'dtd'
+
+    @classmethod
+    def fixup(cls, store):
+        """Perform optional fixups on store."""
+        # Filter out null units (those IMHO should not be exposed by ttkit)
+        store.units = [u for u in store.units if not u.isnull()]
+        return store
 
 
 FILE_FORMAT_CHOICES = [

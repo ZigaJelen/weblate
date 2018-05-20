@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -25,12 +25,15 @@ from django.dispatch.dispatcher import receiver
 from django.contrib.auth.backends import ModelBackend
 
 
-def try_get_user(username):
+def try_get_user(username, list_all=False):
     """Wrapper to get User object for authentication."""
-    if '@' in username:
-        return User.objects.get(email=username)
+    if list_all:
+        method = User.objects.filter
     else:
-        return User.objects.get(username=username)
+        method = User.objects.get
+    if '@' in username:
+        return method(email=username)
+    return method(username=username)
 
 
 class WeblateUserBackend(ModelBackend):
@@ -42,7 +45,7 @@ class WeblateUserBackend(ModelBackend):
         if ((not user_obj.is_active and not user_obj.is_anonymous)
                 or obj is not None):
             return set()
-        # pylint: disable=W0212
+        # pylint: disable=protected-access
         if not hasattr(user_obj, '_perm_cache'):
             user_obj._perm_cache = self.get_user_permissions(user_obj)
             user_obj._perm_cache.update(self.get_group_permissions(user_obj))
@@ -83,7 +86,7 @@ class WeblateUserBackend(ModelBackend):
         user_groups = user_obj.groups.filter(groupacl=None)
         return Permission.objects.filter(group__in=user_groups)
 
-    def authenticate(self, username=None, password=None, **kwargs):
+    def authenticate(self, request, username=None, password=None, **kwargs):
         """Prohibit login for anonymous user and allows to login by email."""
         if username == settings.ANONYMOUS_USER_NAME or username is None:
             return None
@@ -93,7 +96,8 @@ class WeblateUserBackend(ModelBackend):
             if user.check_password(password):
                 return user
         except (User.DoesNotExist, User.MultipleObjectsReturned):
-            return None
+            pass
+        return None
 
     def has_perm(self, user_obj, perm, obj=None):
         """Allow checking permissions for anonymous user as well."""

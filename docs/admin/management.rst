@@ -5,11 +5,11 @@ Management commands
 
 .. note::
 
-    Running management commands under different user than is running your
+    Running management commands under a different user than is running your
     webserver can cause wrong permissions on some files, please check
     :ref:`file-permissions` for more details.
 
-Django comes with management script (available as :file:`./manage.py` in
+Django comes with a management script (available as :file:`./manage.py` in
 sources or installed as :command:`weblate` when Weblate is installed). It
 provides various management commands and Weblate extends it with several
 additional commands.
@@ -29,7 +29,7 @@ done as:
 
     python ./manage.py list_versions
 
-If you've istalled Weblate using PIP installer or by :file:`./setup.py` script,
+If you've installed Weblate using PIP installer or by :file:`./setup.py` script,
 the :command:`weblate` is installed to your path and you can use it to control
 Weblate:
 
@@ -65,8 +65,8 @@ add_suggestions
 
 .. versionadded:: 2.5
 
-Imports translation from the file as a suggestions to given translation. It
-skips translations which are same as existing ones, only different ones are
+Imports translation from the file as a suggestion to given translation. It
+skips translations which are the same as existing ones, only different ones are
 added.
 
 .. django-admin-option:: --author USER@EXAMPLE.COM
@@ -150,7 +150,7 @@ checkgit
 
 .. django-admin:: checkgit <project|project/component>
 
-Prints current state of backend git repository.
+Prints current state of the backend git repository.
 
 You can either define which project or component to update (eg.
 ``weblate/master``) or use ``--all`` to update all existing components.
@@ -177,8 +177,8 @@ You can either define which project or component to update (eg.
 
 .. django-admin-option:: --age HOURS
 
-    Age in hours for committing. If not specified value configured
-    in :ref:`component` is used.
+    Age in hours for committing. If not specified value configured in
+    :ref:`component` is used.
 
 This is most useful if executed periodically from cron or similar tool:
 
@@ -233,6 +233,40 @@ Creates ``admin`` account with random password unless it is specified.
 
     Added parameters ``--username``, ``--email``, ``--name`` and ``--update``.
 
+delete_memory
+-------------
+
+.. django-admin:: delete_memory
+
+.. versionadded:: 2.20
+
+Deletes entries in the Weblate Translation Memory.
+
+.. django-admin-option:: --origin ORIGIN
+   
+    Origin to delete, for imported files the origin is filename without path.
+
+.. django-admin-option:: --all
+   
+    Delete complete memory content and recreate the database.
+
+.. seealso::
+
+    :ref:`translation-memory`
+
+dump_memory
+-----------
+
+.. django-admin:: dump_memory
+
+.. versionadded:: 2.20
+
+Export a JSON file with the Weblate Translation Memory content.
+
+.. seealso::
+
+    :ref:`translation-memory`
+
 dumpuserdata
 ------------
 
@@ -240,7 +274,7 @@ dumpuserdata
 
 Dumps userdata to file for later use by :djadmin:`importuserdata`
 
-This is useful when migrating of merging Weblate instances.
+This is useful when migrating or merging Weblate instances.
 
 import_json
 -----------
@@ -286,6 +320,29 @@ Example of JSON file:
 
     :djadmin:`import_project`
 
+import_memory
+-------------
+
+.. django-admin:: import_memory <file>
+
+.. versionadded:: 2.20
+
+Imports a TMX or JSON file into the Weblate Translation Memory.
+
+.. django-admin-option:: --language-map LANGMAP
+
+    Allows to map languages in the TMX to Weblate one. The language codes are
+    mapped after normalization usually done by Weblate.
+
+    For example ``--language-map en_US:en`` will import all ``en_US`` strings
+    as ``en`` ones.
+
+    This can be useful in case your TMX file locales does not match what you
+    use in Weblate.
+
+.. seealso::
+
+    :ref:`translation-memory`
 
 import_project
 --------------
@@ -316,7 +373,7 @@ Existing components will be skipped.
 
 .. django-admin-option:: --base-file-template TEMPLATE
 
-    Customize base file for monolingual translations.
+    Customise base file for monolingual translations.
 
 .. django-admin-option:: --file-format FORMAT
 
@@ -451,6 +508,33 @@ list_ignored_checks
 Lists most frequently ignored checks. This can be useful for tuning your setup,
 if users have to ignore too many of consistency checks.
 
+list_languages
+--------------
+
+.. django-admin:: list_languages <locale>
+
+Lists supported language in MediaWiki markup - language codes, English names
+and localized names.
+
+This is used to generate <http://wiki.l10n.cz/Jazyky>.
+
+list_memory
+-----------
+
+.. django-admin:: list_memory
+
+.. versionadded:: 2.20
+
+Lists contents of the Weblate Translation Memory.
+
+.. django-admin-option:: --type {origin}
+   
+    Type of information to list, defaults to listing used origins.
+
+.. seealso::
+
+    :ref:`translation-memory`
+
 list_translators
 ----------------
 
@@ -497,6 +581,12 @@ repository).
 You can either define which project or component to update (eg.
 ``weblate/master``) or use ``--all`` to update all existing components.
 
+.. note::
+
+    You seldom need to invoke this, Weblate will automatically load changed
+    files on VCS update. This is needed in case you manually change underlying
+    Weblate VCS repository or in some special cases after upgrade.
+
 lock_translation
 ----------------
 
@@ -526,13 +616,18 @@ Pushes committed changes to upstream VCS repository.
 You can either define which project or component to update (eg.
 ``weblate/master``) or use ``--all`` to update all existing components.
 
+.. note::
+
+    Weblate does push changes automatically if :guilabel:`Push on commit` in
+    :ref:`component` is enabled, what is default.
+
 rebuild_index
 -------------
 
 .. django-admin:: rebuild_index <project|project/component>
 
 Rebuilds index for fulltext search. This might be lengthy operation if you
-have huge set of translation units.
+have a huge set of translation units.
 
 .. django-admin-option:: --clean
 
@@ -540,7 +635,7 @@ have huge set of translation units.
 
 .. django-admin-option:: --optimize
 
-    The index will not be processed again, only it's content will be optimized
+    The index will not be processed again, only its content will be optimized
     (removing stale entries and merging possibly split index files).
 
 .. seealso:: 
@@ -566,8 +661,8 @@ unlock_translation
 
 .. django-admin:: unlock_translation <project|project/component>
 
-Unnocks given component for translating. This is useful in case you want to do
-some maintenance on underlaying repository.
+Unlocks a given component for translating. This is useful in case you want to do
+some maintenance on the underlaying repository.
 
 You can either define which project or component to update (eg.
 ``weblate/master``) or use ``--all`` to update all existing components.
@@ -590,6 +685,11 @@ Configures default groups and optionally assigns all users to default group.
 .. django-admin-option:: --no-privs-update
 
     Disables update of existing groups (only adds new ones).
+
+.. django-admin-option:: --no-projects-update
+
+    Prevents updates of groups for existing projects. This allows to add newly
+    added groups to existing projects, see :ref:`acl`.
 
 .. seealso:: 
    
@@ -627,3 +727,8 @@ Fetches remote VCS repositories and updates internal cache.
 
 You can either define which project or component to update (eg.
 ``weblate/master``) or use ``--all`` to update all existing components.
+
+.. note::
+
+    Usually it is better to configure hooks in the repository to trigger
+    :ref:`hooks` instead of regular polling by :djadmin:`updategit`.

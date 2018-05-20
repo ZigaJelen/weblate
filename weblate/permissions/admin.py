@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -25,6 +25,7 @@ from weblate.wladmin.models import WeblateModelAdmin
 
 class GroupACLAdmin(WeblateModelAdmin):
     list_display = ['language', 'project_subproject', 'group_list']
+    filter_horizontal = ('permissions', 'groups')
 
     def group_list(self, obj):
         groups = obj.groups.values_list('name', flat=True)
@@ -36,8 +37,7 @@ class GroupACLAdmin(WeblateModelAdmin):
     def project_subproject(self, obj):
         if obj.subproject:
             return obj.subproject
-        else:
-            return obj.project
+        return obj.project
     project_subproject.short_description = _('Project / Component')
 
 

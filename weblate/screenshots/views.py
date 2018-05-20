@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -40,11 +40,11 @@ from weblate.screenshots.forms import ScreenshotForm
 from weblate.screenshots.models import Screenshot
 from weblate.permissions.helpers import check_access
 from weblate.trans.models import Source
-from weblate.trans.views.helper import get_subproject
 from weblate.permissions.helpers import (
     can_delete_screenshot, can_add_screenshot, can_change_screenshot,
 )
 from weblate.utils import messages
+from weblate.utils.views import ComponentViewMixin
 
 
 def try_add_source(request, obj):
@@ -62,20 +62,13 @@ def try_add_source(request, obj):
         return False
 
 
-class ScreenshotList(ListView):
+class ScreenshotList(ListView, ComponentViewMixin):
     paginate_by = 25
     model = Screenshot
     _add_form = None
 
-    def get_component(self, kwargs):
-        return get_subproject(
-            self.request,
-            kwargs['project'],
-            kwargs['subproject']
-        )
-
     def get_queryset(self):
-        self.kwargs['component'] = self.get_component(self.kwargs)
+        self.kwargs['component'] = self.get_component()
         return Screenshot.objects.filter(component=self.kwargs['component'])
 
     def get_context_data(self):
@@ -90,7 +83,7 @@ class ScreenshotList(ListView):
         return result
 
     def post(self, request, **kwargs):
-        component = self.get_component(kwargs)
+        component = self.get_component()
         if not can_add_screenshot(request.user, component.project):
             raise PermissionDenied()
         self._add_form = ScreenshotForm(request.POST, request.FILES)
@@ -108,12 +101,11 @@ class ScreenshotList(ListView):
                 )
             )
             return redirect(obj)
-        else:
-            messages.error(
-                request,
-                _('Failed to upload screenshot, please fix errors below.')
-            )
-            return self.get(request, **kwargs)
+        messages.error(
+            request,
+            _('Failed to upload screenshot, please fix errors below.')
+        )
+        return self.get(request, **kwargs)
 
 
 class ScreenshotDetail(DetailView):
@@ -221,6 +213,7 @@ def search_source(request, pk):
             'q': request.POST.get('q', ''),
             'type': 'all',
             'source': True,
+            'context': True,
         },
         translation=translation,
     )

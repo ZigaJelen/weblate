@@ -11,7 +11,7 @@ Git exporter
 
 .. versionadded:: 2.10
 
-The Git exporter provides you read only access to underlaying Git repository
+The Git exporter provides you read only access to the underlaying Git repository
 using http.
 
 Installation
@@ -26,7 +26,7 @@ To install, simply add ``weblate.gitexport`` to installed applications in
         'weblate.gitexport',
     )
 
-After installing you need to migrate your database, so that existing
+After installing, you need to migrate your database so that existing
 repositories are properly exported:
 
 .. code-block:: sh
@@ -125,9 +125,9 @@ To install, simply add ``weblate.legal`` to installed applications in
     )
 
     # Middleware to enforce TOS confirmation of logged in users
-    MIDDLEWARE_CLASSES += (
+    MIDDLEWARE += [
         'weblate.legal.middleware.RequireTOSMiddleware',
-    )
+    ]
 
 This module includes additional database structures, to have them installed you
 should run the database migration:
@@ -159,7 +159,7 @@ Weblate currently supports two backends:
 * `Libravatar <https://www.libravatar.org/>`_, what is federated avatar service
   with fallback to `Gravatar`_. Libravatar is used automatically when 
   `pyLibravatar <https://pypi.python.org/pypi/pyLibravatar>`_ is installed.
-* `Gravatar`_ can be also used directly by Weblate, that is used if the
+* `Gravatar`_ can be also used directly by Weblate and is used if the
   pyLibravatar library is not found.
 
 .. _Gravatar: https://gravatar.com/
@@ -168,3 +168,17 @@ Weblate currently supports two backends:
    
    :ref:`production-cache-avatar`,
    :setting:`ENABLE_AVATARS`
+
+Spam protection
+---------------
+
+Optionally Weblate can be protected against suggestion spamming by
+unauthenticated users through `akismet.com <https://akismet.com/>`_
+service.
+
+To enable this, you need to install `akismet` Python module and configure
+Akismet API key.
+
+.. seealso::
+
+    :setting:`AKISMET_API_KEY`

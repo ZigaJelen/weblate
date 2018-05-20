@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -23,8 +23,7 @@ from __future__ import unicode_literals
 import os.path
 
 from django.conf import settings
-from django.contrib.sites.models import Site
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.utils.translation import ugettext as _
 
 import six
@@ -32,14 +31,18 @@ import six
 from weblate.trans.models import SubProject, IndexUpdate
 from weblate import settings_example
 from weblate.accounts.avatar import HAS_LIBRAVATAR
-from weblate.trans.util import (
-    get_configuration_errors, HAS_PYUCA, check_domain
-)
+from weblate.trans.util import HAS_PYUCA, check_domain
 from weblate.trans.ssh import (
     generate_ssh_key, get_key_data, add_host_key,
     get_host_keys, can_generate_key
 )
-import weblate
+from weblate.utils import messages
+from weblate.utils.site import get_site_url, get_site_domain
+from weblate.wladmin.models import ConfigurationError
+
+GOOD_CACHE = frozenset((
+    'MemcachedCache', 'PyLibMCCache', 'DatabaseCache', 'RedisCache'
+))
 
 
 def report(request, admin_site):
@@ -70,8 +73,25 @@ def get_first_loader():
     return loaders[0][0]
 
 
+def handle_dismiss(request):
+    try:
+        error = ConfigurationError.objects.get(
+            pk=int(request.POST['pk'])
+        )
+        if 'ignore' in request.POST:
+            error.ignored = True
+            error.save(update_fields=['ignored'])
+        else:
+            error.delete()
+    except (ValueError, KeyError, ConfigurationError.DoesNotExist):
+        messages.error(request, _('Failed to dismiss configuration error!'))
+    return redirect('admin:performance')
+
+
 def performance(request, admin_site):
     """Show performance tuning tips."""
+    if request.method == 'POST':
+        return handle_dismiss(request)
     checks = []
     # Check for debug mode
     checks.append((
@@ -81,12 +101,11 @@ def performance(request, admin_site):
         settings.DEBUG,
     ))
     # Check for domain configuration
-    domain = Site.objects.get_current().domain
     checks.append((
         _('Site domain'),
-        check_domain(domain),
+        check_domain(get_site_domain()),
         'production-site',
-        domain,
+        get_site_url(),
     ))
     # Check database being used
     checks.append((
@@ -128,7 +147,7 @@ def performance(request, admin_site):
         ))
     # Check for sane caching
     caches = settings.CACHES['default']['BACKEND'].split('.')[-1]
-    if caches in ['MemcachedCache', 'PyLibMCCache', 'DatabaseCache']:
+    if caches in GOOD_CACHE:
         # We consider these good
         caches = True
     elif caches in ['DummyCache']:
@@ -217,7 +236,7 @@ def performance(request, admin_site):
 
     context = admin_site.each_context(request)
     context['checks'] = checks
-    context['errors'] = get_configuration_errors()
+    context['errors'] = ConfigurationError.objects.filter(ignored=False)
 
     return render(
         request,
@@ -249,7 +268,6 @@ def ssh(request, admin_site):
     context['public_key'] = key
     context['can_generate'] = can_generate
     context['host_keys'] = get_host_keys()
-    context['ssh_docs'] = weblate.get_doc_url('admin/projects', 'private')
 
     return render(
         request,

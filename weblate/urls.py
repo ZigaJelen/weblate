@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -31,6 +31,7 @@ from weblate.trans.feeds import (
 )
 from weblate.trans.views.changes import ChangesView, ChangesCSVView
 import weblate.accounts.views
+import weblate.addons.views
 import weblate.lang.views
 import weblate.screenshots.views
 import weblate.trans.views.acl
@@ -186,6 +187,11 @@ urlpatterns = [
         name='translation',
     ),
     url(
+        r'^component-list/(?P<name>[^/]*)/$',
+        weblate.trans.views.basic.show_component_list,
+        name='component-list',
+    ),
+    url(
         r'^translate/' + TRANSLATION + '$',
         weblate.trans.views.edit.translate,
         name='translate',
@@ -206,14 +212,14 @@ urlpatterns = [
         name='download_translation_format',
     ),
     url(
-        r'^language-pack/' + TRANSLATION + '$',
-        weblate.trans.views.files.download_language_pack,
-        name='download_language_pack',
-    ),
-    url(
         r'^upload/' + TRANSLATION + '$',
         weblate.trans.views.files.upload_translation,
         name='upload_translation',
+    ),
+    url(
+        r'^new-unit/' + TRANSLATION + '$',
+        weblate.trans.views.edit.new_unit,
+        name='new-unit',
     ),
     url(
         r'^auto-translate/' + TRANSLATION + '$',
@@ -236,6 +242,21 @@ urlpatterns = [
         name='replace',
     ),
     url(
+        r'^state-change/' + PROJECT + '$',
+        weblate.trans.views.search.state_change,
+        name='state-change',
+    ),
+    url(
+        r'^state-change/' + SUBPROJECT + '$',
+        weblate.trans.views.search.state_change,
+        name='state-change',
+    ),
+    url(
+        r'^state-change/' + TRANSLATION + '$',
+        weblate.trans.views.search.state_change,
+        name='state-change',
+    ),
+    url(
         r'^credits/' + SUBPROJECT + '$',
         weblate.trans.views.reports.get_credits,
         name='credits',
@@ -251,9 +272,24 @@ urlpatterns = [
         name='new-language',
     ),
     url(
+        r'^addons/' + SUBPROJECT + '$',
+        weblate.addons.views.AddonList.as_view(),
+        name='addons',
+    ),
+    url(
+        r'^addons/' + SUBPROJECT + '(?P<pk>[0-9]+)/$',
+        weblate.addons.views.AddonDetail.as_view(),
+        name='addon-detail',
+    ),
+    url(
         r'^access/' + PROJECT + '$',
         weblate.trans.views.acl.manage_access,
         name='manage-access',
+    ),
+    url(
+        r'^access/' + PROJECT + 'change/$',
+        weblate.trans.views.acl.change_access,
+        name='change-access',
     ),
     url(
         r'^settings/' + PROJECT + '$',
@@ -462,16 +498,6 @@ urlpatterns = [
         r'^unlock/' + SUBPROJECT + '$',
         weblate.trans.views.lock.unlock_subproject,
         name='unlock_subproject',
-    ),
-    url(
-        r'^lock/' + TRANSLATION + '$',
-        weblate.trans.views.lock.lock_translation,
-        name='lock_translation',
-    ),
-    url(
-        r'^unlock/' + TRANSLATION + '$',
-        weblate.trans.views.lock.unlock_translation,
-        name='unlock_translation',
     ),
 
     # Screenshots
@@ -705,19 +731,13 @@ urlpatterns = [
 
     # AJAX/JS backends
     url(
-        r'^js/lock/' + TRANSLATION + '$',
-        weblate.trans.views.lock.update_lock,
-        name='js-lock',
-    ),
-    url(
         r'^js/ignore-check/(?P<check_id>[0-9]+)/$',
         weblate.trans.views.js.ignore_check,
         name='js-ignore-check',
     ),
     url(
         r'^js/i18n/$',
-        django.views.i18n.javascript_catalog,
-        {'packages': ('weblate',)},
+        django.views.i18n.JavaScriptCatalog.as_view(packages=['weblate']),
         name='js-catalog'
     ),
     url(
@@ -773,13 +793,19 @@ urlpatterns = [
 
     # Admin interface
     url(r'^admin/doc/', include('django.contrib.admindocs.urls')),
-    url(r'^admin/', include(weblate.wladmin.sites.SITE.urls)),
+    url(
+        r'^admin/',
+        include(
+            (weblate.wladmin.sites.SITE.urls, 'weblate.wladmin'),
+            namespace='admin'
+        )
+    ),
 
     # Auth
     url(r'^accounts/', include(weblate.accounts.urls)),
 
     # Auth
-    url(r'^api/', include(weblate.api.urls, namespace='api')),
+    url(r'^api/', include((weblate.api.urls, 'weblate.api'), namespace='api')),
 
     # Static pages
     url(r'^contact/', weblate.accounts.views.contact, name='contact'),
@@ -841,14 +867,6 @@ urlpatterns = [
         r'^projects/' + TRANSLATION + 'download/$',
         RedirectView.as_view(
             url='/download/%(project)s/%(subproject)s/%(lang)s/',
-            permanent=True,
-            query_string=True
-        )
-    ),
-    url(
-        r'^projects/' + TRANSLATION + 'language_pack/$',
-        RedirectView.as_view(
-            url='/language-pack/%(project)s/%(subproject)s/%(lang)s/',
             permanent=True,
             query_string=True
         )
@@ -969,7 +987,7 @@ urlpatterns = [
 ]
 
 if 'weblate.billing' in settings.INSTALLED_APPS:
-    # pylint: disable=C0413
+    # pylint: disable=wrong-import-position
     import weblate.billing.views
     urlpatterns += [
         url(
@@ -985,7 +1003,7 @@ if 'weblate.billing' in settings.INSTALLED_APPS:
     ]
 
 if 'weblate.gitexport' in settings.INSTALLED_APPS:
-    # pylint: disable=C0413
+    # pylint: disable=wrong-import-position
     import weblate.gitexport.views
     urlpatterns += [
         # Redirect clone from the Weblate project URL
@@ -1024,10 +1042,13 @@ if 'weblate.gitexport' in settings.INSTALLED_APPS:
     ]
 
 if 'weblate.legal' in settings.INSTALLED_APPS:
-    # pylint: disable=C0413
+    # pylint: disable=wrong-import-position
     import weblate.legal.views
     urlpatterns += [
-        url(r'^legal/', include('weblate.legal.urls', namespace='legal')),
+        url(
+            r'^legal/',
+            include(('weblate.legal.urls', 'weblate.legal'), namespace='legal')
+        ),
     ]
 
 if settings.DEBUG:
@@ -1040,7 +1061,7 @@ if settings.DEBUG:
     ]
 
 if settings.DEBUG and 'debug_toolbar' in settings.INSTALLED_APPS:
-    # pylint: disable=C0413
+    # pylint: disable=wrong-import-position
     import debug_toolbar
     urlpatterns += [
         url(r'^__debug__/', include(debug_toolbar.urls)),

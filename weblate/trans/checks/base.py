@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -54,7 +54,7 @@ class Check(object):
             return True
 
         # Ignore target checks on templates
-        if unit.translation.is_template():
+        if unit.translation.is_template:
             return True
 
         return False
@@ -193,6 +193,6 @@ class CountingCheck(TargetCheck):
     string = None
 
     def check_single(self, source, target, unit):
-        if len(target) == 0 or len(source) == 0:
+        if not target or not source:
             return False
         return source.count(self.string) != target.count(self.string)

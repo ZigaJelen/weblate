@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -26,7 +26,7 @@ from weblate.trans.models import (
 from weblate.lang.models import Language
 from weblate.permissions.helpers import can_see_git_repository
 from weblate.screenshots.models import Screenshot
-from weblate.trans.site import get_site_url
+from weblate.utils.site import get_site_url
 from weblate.utils.validators import validate_bitmap
 
 
@@ -35,7 +35,7 @@ class MultiFieldHyperlinkedIdentityField(serializers.HyperlinkedIdentityField):
         self.strip_parts = strip_parts
         super(MultiFieldHyperlinkedIdentityField, self).__init__(**kwargs)
 
-    # pylint: disable=W0622
+    # pylint: disable=redefined-builtin
     def get_url(self, obj, view_name, request, format):
         """
         Given an object, return the URL that hyperlinks to the object.
@@ -88,7 +88,7 @@ class LanguageSerializer(serializers.ModelSerializer):
     class Meta(object):
         model = Language
         fields = (
-            'code', 'name', 'nplurals', 'pluralequation', 'direction',
+            'code', 'name', 'direction',
             'web_url', 'url',
         )
         extra_kwargs = {
@@ -208,14 +208,44 @@ class TranslationSerializer(RemovableSerializer):
     is_template = serializers.BooleanField(
         read_only=True
     )
+    total = serializers.IntegerField(
+        source='stats.all', read_only=True,
+    )
+    total_words = serializers.IntegerField(
+        source='stats.all_words', read_only=True,
+    )
+    translated = serializers.IntegerField(
+        source='stats.translated', read_only=True,
+    )
+    translated_words = serializers.IntegerField(
+        source='stats.translated_words', read_only=True,
+    )
     translated_percent = serializers.FloatField(
-        source='get_translated_percent', read_only=True,
+        source='stats.translated_percent', read_only=True,
+    )
+    fuzzy = serializers.IntegerField(
+        source='stats.fuzzy', read_only=True,
+    )
+    fuzzy_words = serializers.IntegerField(
+        source='stats.fuzzy_words', read_only=True,
     )
     fuzzy_percent = serializers.FloatField(
-        source='get_fuzzy_percent', read_only=True,
+        source='stats.fuzzy_percent', read_only=True,
+    )
+    failing_checks = serializers.IntegerField(
+        source='stats.allchecks', read_only=True,
+    )
+    failing_checks_words = serializers.IntegerField(
+        source='stats.allchecks_words', read_only=True,
     )
     failing_checks_percent = serializers.FloatField(
-        source='get_failing_checks_percent', read_only=True,
+        source='stats.allchecks_percent', read_only=True,
+    )
+    have_suggestion = serializers.IntegerField(
+        source='stats.suggestions', read_only=True,
+    )
+    have_comment = serializers.IntegerField(
+        source='stats.comments', read_only=True,
     )
     last_author = serializers.CharField(
         source='get_last_author', read_only=True,
@@ -266,16 +296,15 @@ class TranslationSerializer(RemovableSerializer):
     class Meta(object):
         model = Translation
         fields = (
-            'language', 'component', 'translated', 'fuzzy', 'total',
-            'translated_words', 'fuzzy_words', 'failing_checks_words',
-            'total_words', 'failing_checks', 'have_suggestion', 'have_comment',
+            'language', 'component',
             'language_code', 'filename', 'revision',
             'web_url', 'share_url', 'translate_url', 'url',
             'is_template',
             'total', 'total_words',
             'translated', 'translated_words', 'translated_percent',
-            'fuzzy', 'fuzzy_percent',
-            'failing_checks_percent',
+            'fuzzy', 'fuzzy_words', 'fuzzy_percent',
+            'failing_checks', 'failing_checks_words', 'failing_checks_percent',
+            'have_suggestion', 'have_comment',
             'last_change', 'last_author',
             'repository_url', 'file_url', 'statistics_url', 'changes_list_url',
             'units_list_url',
@@ -312,6 +341,7 @@ class LockRequestSerializer(ReadOnlySerializer):
 
 class UploadRequestSerializer(ReadOnlySerializer):
     overwrite = serializers.BooleanField()
+    file = serializers.FileField()
 
 
 class RepoRequestSerializer(ReadOnlySerializer):
@@ -321,8 +351,8 @@ class RepoRequestSerializer(ReadOnlySerializer):
 
 
 class StatisticsSerializer(ReadOnlySerializer):
-    def to_representation(self, obj):
-        return obj.get_stats()
+    def to_representation(self, instance):
+        return instance.get_stats()
 
 
 class UnitSerializer(RemovableSerializer):

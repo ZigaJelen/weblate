@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -20,6 +20,7 @@
 
 from django.utils.translation import ugettext_lazy as _
 from weblate.trans.checks.base import TargetCheck
+from weblate.utils.state import STATE_TRANSLATED
 
 
 class PluralsCheck(TargetCheck):
@@ -69,7 +70,7 @@ class ConsistencyCheck(TargetCheck):
     check_id = 'inconsistent'
     name = _('Inconsistent')
     description = _(
-        'This message has more than one translation in this project'
+        'This string has more than one translation in this project'
     )
     ignore_untranslated = False
     severity = 'warning'
@@ -85,7 +86,7 @@ class ConsistencyCheck(TargetCheck):
         )
 
         if not unit.translated:
-            related = related.filter(translated=True)
+            related = related.filter(state=STATE_TRANSLATED)
 
         return related.exists()
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -18,12 +18,16 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
+from __future__ import unicode_literals
+
 import os
 import shutil
 
 from django.contrib.auth.models import Group, Permission
 from django.db.models import Q
-from django.db.models.signals import post_delete, post_save, m2m_changed
+from django.db.models.signals import (
+    post_delete, post_save, m2m_changed, pre_delete,
+)
 from django.dispatch import receiver
 
 from weblate.accounts.models import Profile
@@ -43,7 +47,6 @@ from weblate.trans.models.search import IndexUpdate
 from weblate.trans.models.change import Change
 from weblate.trans.models.dictionary import Dictionary
 from weblate.trans.models.source import Source
-from weblate.trans.models.advertisement import Advertisement
 from weblate.trans.models.whiteboard import WhiteboardMessage
 from weblate.trans.models.componentlist import (
     ComponentList, AutoComponentList,
@@ -61,7 +64,7 @@ from weblate.utils.decorators import disable_for_loaddata
 __all__ = [
     'Project', 'SubProject', 'Translation', 'Unit', 'Check', 'Suggestion',
     'Comment', 'Vote', 'IndexUpdate', 'Change', 'Dictionary', 'Source',
-    'Advertisement', 'WhiteboardMessage', 'ComponentList',
+    'WhiteboardMessage', 'ComponentList',
     'WeblateConf',
 ]
 
@@ -74,7 +77,7 @@ def delete_object_dir(sender, instance, **kwargs):
     if hasattr(instance, 'is_repo_link') and instance.is_repo_link:
         return
 
-    project_path = instance.get_path()
+    project_path = instance.full_path
 
     # Remove path if it exists
     if os.path.exists(project_path):
@@ -98,23 +101,7 @@ def update_source(sender, instance, **kwargs):
     if instance.check_flags_modified:
         for unit in related_units:
             unit.run_checks()
-
-
-def get_related_units(unitdata):
-    """Return queryset with related units."""
-    related_units = Unit.objects.filter(
-        content_hash=unitdata.content_hash,
-        translation__subproject__project=unitdata.project,
-    )
-    if unitdata.language is not None:
-        related_units = related_units.filter(
-            translation__language=unitdata.language
-        )
-
-    return related_units.select_related(
-        'translation__subproject__project',
-        'translation__language'
-    )
+            unit.translation.invalidate_cache()
 
 
 @receiver(post_save, sender=Check)
@@ -123,11 +110,12 @@ def update_failed_check_flag(sender, instance, **kwargs):
     """Update related unit failed check flag."""
     if instance.language is None:
         return
-    related = get_related_units(instance)
+    related = instance.related_units
     if instance.for_unit is not None:
         related = related.exclude(pk=instance.for_unit)
     for unit in related:
         unit.update_has_failing_check(False)
+        unit.translation.invalidate_cache()
 
 
 @receiver(post_delete, sender=Comment)
@@ -135,13 +123,10 @@ def update_failed_check_flag(sender, instance, **kwargs):
 @disable_for_loaddata
 def update_comment_flag(sender, instance, **kwargs):
     """Update related unit comment flags"""
-    for unit in get_related_units(instance):
+    for unit in instance.related_units:
         # Update unit stats
         unit.update_has_comment()
-
-        # Invalidate counts cache
-        if instance.language is None:
-            unit.translation.invalidate_cache('sourcecomments')
+        unit.translation.invalidate_cache()
 
 
 @receiver(post_delete, sender=Suggestion)
@@ -149,9 +134,10 @@ def update_comment_flag(sender, instance, **kwargs):
 @disable_for_loaddata
 def update_suggestion_flag(sender, instance, **kwargs):
     """Update related unit suggestion flags"""
-    for unit in get_related_units(instance):
+    for unit in instance.related_units:
         # Update unit stats
         unit.update_has_suggestion()
+        unit.translation.invalidate_cache()
 
 
 @receiver(vcs_post_push)
@@ -223,6 +209,11 @@ def add_user_subscription(sender, instance, action, reverse, model, pk_set,
             target.add_subscription(instance.user)
 
 
+@receiver(m2m_changed, sender=ComponentList.components.through)
+def change_componentlist(sender, instance, **kwargs):
+    instance.stats.invalidate()
+
+
 @receiver(post_save, sender=AutoComponentList)
 @disable_for_loaddata
 def auto_componentlist(sender, instance, **kwargs):
@@ -248,6 +239,25 @@ def auto_component_list(sender, instance, **kwargs):
 @disable_for_loaddata
 def setup_group_acl(sender, instance, **kwargs):
     """Setup Group and GroupACL objects on project save."""
+    old_access_control = instance.old_access_control
+    instance.old_access_control = instance.access_control
+
+    if instance.access_control == Project.ACCESS_CUSTOM:
+        if old_access_control == Project.ACCESS_CUSTOM:
+            return
+        # Do cleanup of previous setup
+        try:
+            group_acl = GroupACL.objects.get(
+                project=instance, subproject=None, language=None
+            )
+            Group.objects.filter(
+                groupacl=group_acl, name__contains='@'
+            ).delete()
+            group_acl.delete()
+            return
+        except GroupACL.DoesNotExist:
+            return
+
     group_acl = GroupACL.objects.get_or_create(
         project=instance, subproject=None, language=None
     )[0]
@@ -259,7 +269,10 @@ def setup_group_acl(sender, instance, **kwargs):
         lookup = Q(name__startswith='@')
     else:
         permissions = PUBLIC_PERMS
-        lookup = Q(name='@Administration')
+        lookup = Q(name__in=('@Administration', '@Review'))
+
+    if not instance.enable_review:
+        lookup = lookup & ~Q(name='@Review')
 
     group_acl.permissions.set(
         Permission.objects.filter(codename__in=permissions),
@@ -283,8 +296,18 @@ def setup_group_acl(sender, instance, **kwargs):
         handled.add(group.pk)
 
     # Remove stale groups
-    group_acl.groups.filter(
+    Group.objects.filter(
+        groupacl=group_acl,
         name__contains='@'
     ).exclude(
         pk__in=handled
     ).delete()
+
+
+@receiver(pre_delete, sender=Project)
+def cleanup_group_acl(sender, instance, **kwargs):
+    group_acl = GroupACL.objects.get_or_create(
+        project=instance, subproject=None, language=None
+    )[0]
+    # Remove stale groups
+    group_acl.groups.filter(name__contains='@').delete()

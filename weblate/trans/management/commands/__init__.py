@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -106,7 +106,7 @@ class WeblateComponentCommand(WeblateCommand):
 
     def get_translations(self, **options):
         """Return list of translations matching parameters."""
-        return Translation.objects.filter(
+        return Translation.objects.prefetch().filter(
             subproject__in=self.get_subprojects(**options)
         )
 
@@ -115,7 +115,7 @@ class WeblateComponentCommand(WeblateCommand):
         if options['all']:
             # all components
             result = SubProject.objects.all()
-        elif len(options['component']) == 0:
+        elif not options['component']:
             # no argumets to filter projects
             self.stderr.write(
                 'Please specify either --all '

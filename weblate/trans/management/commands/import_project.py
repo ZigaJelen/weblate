@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -25,6 +25,7 @@ import re
 import shutil
 import fnmatch
 
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.utils.encoding import force_text
 from django.db.models import Q
@@ -102,8 +103,33 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--vcs',
-            default='git',
+            default=settings.DEFAULT_VCS,
             help='Version control system to use',
+        )
+        parser.add_argument(
+            '--push-url',
+            default='',
+            help='Set push URL for the project',
+        )
+        parser.add_argument(
+            '--push-url-same',
+            action='store_true',
+            default=False,
+            help='Set push URL for the project to same as pull',
+        )
+        parser.add_argument(
+            '--disable-push-on-commit',
+            action='store_false',
+            default=settings.DEFAULT_PUSH_ON_COMMIT,
+            dest='push_on_commit',
+            help='Disable push on commit for created components',
+        )
+        parser.add_argument(
+            '--push-on-commit',
+            action='store_true',
+            default=settings.DEFAULT_PUSH_ON_COMMIT,
+            dest='push_on_commit',
+            help='Enable push on commit for created components',
         )
         parser.add_argument(
             '--main-component',
@@ -142,7 +168,9 @@ class Command(BaseCommand):
         self.name_template = None
         self.base_file_template = None
         self.vcs = None
+        self.push_url = None
         self.logger = LOGGER
+        self.push_on_commit = True
         self._mask_regexp = None
 
     def format_string(self, template, match):
@@ -166,16 +194,17 @@ class Command(BaseCommand):
             return self.component_re
         if self._mask_regexp is None:
             match = fnmatch.translate(self.filemask)
-            match = match.replace('.*.*', '[[NAME_WILDCARD]]')
-            match = match.replace('.*', '(?P<language>.*)')
-            match = match.replace('[[NAME_WILDCARD]]', '(?P<name>.*)')
+            match = match.replace('.*.*', '(?P<name>[[WILDCARD]])')
+            match = match.replace('.*', '(?P<language>[[WILDCARD]])', 1)
+            match = match.replace('.*', '(?P=language)')
+            match = match.replace('[[WILDCARD]]', '.*')
             self._mask_regexp = re.compile(match)
         return self._mask_regexp
 
     def checkout_tmp(self, project, repo, branch):
         """Checkout project to temporary location."""
         # Create temporary working dir
-        workdir = tempfile.mkdtemp(dir=project.get_path())
+        workdir = tempfile.mkdtemp(dir=project.full_path)
         # Make the temporary directory readable by others
         os.chmod(workdir, 0o755)
 
@@ -201,7 +230,7 @@ class Command(BaseCommand):
         matches = self.get_matching_files(repo)
         self.logger.info('Found %d matching files', len(matches))
 
-        if len(matches) == 0:
+        if not matches:
             raise CommandError('Your mask did not match any files!')
 
         # Parse subproject names out of them
@@ -239,16 +268,21 @@ class Command(BaseCommand):
             'Failed to find suitable name for {0}'.format(name)
         )
 
-    def parse_options(self, options):
+    def parse_options(self, repo, options):
         """Parse parameters"""
         self.filemask = options['filemask']
         self.vcs = options['vcs']
+        if options['push_url_same']:
+            self.push_url = repo
+        else:
+            self.push_url = options['push_url']
         self.file_format = options['file_format']
         self.language_regex = options['language_regex']
         self.main_component = options['main_component']
         self.name_template = options['name_template']
         self.license = options['license']
         self.license_url = options['license_url']
+        self.push_on_commit = options['push_on_commit']
         self.base_file_template = options['base_file_template']
         if options['component_regexp']:
             try:
@@ -294,21 +328,21 @@ class Command(BaseCommand):
         # Read params
         repo = options['repo']
         branch = options['branch']
-        self.parse_options(options)
+        self.parse_options(repo, options)
 
         # Try to get project
         try:
             project = Project.objects.get(slug=options['project'])
         except Project.DoesNotExist:
             raise CommandError(
-                'Project {0} not found, you have to create it first!'.format(
+                'Project "{0}" not found, please create it first!'.format(
                     options['project']
                 )
             )
 
         # We need to limit slug length to avoid problems with MySQL
         # silent truncation
-        # pylint: disable=W0212
+        # pylint: disable=protected-access
         slug_len = SubProject._meta.get_field('slug').max_length
         name_len = SubProject._meta.get_field('name').max_length
 
@@ -318,13 +352,13 @@ class Command(BaseCommand):
                 sub_project = SubProject.objects.get_linked(repo)
             except SubProject.DoesNotExist:
                 raise CommandError(
-                    'SubProject {0} not found, '
-                    'you need to create it first!'.format(
+                    'Component "{0}" not found, '
+                    'please create it first!'.format(
                         repo
                     )
                 )
             matches = self.get_matching_subprojects(
-                sub_project.get_path(),
+                sub_project.full_path,
             )
         else:
             matches, sharedrepo = self.import_initial(
@@ -368,7 +402,7 @@ class Command(BaseCommand):
         result = {
             'file_format': self.file_format,
             'vcs': self.vcs,
-
+            'push_on_commit': self.push_on_commit,
         }
         optionals = (
             'license',
@@ -415,13 +449,14 @@ class Command(BaseCommand):
         # Rename gitrepository to new name
         os.rename(
             workdir,
-            os.path.join(project.get_path(), slug)
+            os.path.join(project.full_path, slug)
         )
 
         SubProject.objects.create(
             name=name,
             slug=slug,
             project=project,
+            push=self.push_url,
             repo=repo,
             branch=branch,
             template=template,

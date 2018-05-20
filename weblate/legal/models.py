@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -35,7 +35,9 @@ TOS_DATE = date(2017, 7, 2)
 
 @python_2_unicode_compatible
 class Agreement(models.Model):
-    user = models.OneToOneField(User, unique=True)
+    user = models.OneToOneField(
+        User, unique=True, on_delete=models.deletion.CASCADE
+    )
     tos = models.DateField(default=date(1970, 1, 1))
     timestamp = models.DateTimeField(auto_now=True)
 

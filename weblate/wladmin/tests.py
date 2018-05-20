@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -21,7 +21,7 @@
 import os
 
 from django.conf import settings
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 from weblate.trans.tests.test_views import FixtureTestCase
 from weblate.trans.util import add_configuration_error
@@ -99,13 +99,11 @@ class AdminTest(FixtureTestCase):
 
     def test_create_project(self):
         response = self.client.get(reverse('admin:trans_project_add'))
-        self.assertContains(response, 'Required fields are marked as bold')
+        self.assertContains(response, 'Required fields are marked in bold')
 
     def test_create_subproject(self):
         response = self.client.get(reverse('admin:trans_subproject_add'))
-        self.assertContains(
-            response, 'Importing a new translation can take some time'
-        )
+        self.assertContains(response, 'Import speed documentation')
 
     def test_subproject(self):
         """Test for custom subproject actions."""

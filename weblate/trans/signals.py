@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -26,4 +26,6 @@ vcs_post_update = Signal(providing_args=['subproject', 'previous_head'])
 vcs_pre_commit = Signal(providing_args=['translation'])
 vcs_post_commit = Signal(providing_args=['translation'])
 translation_post_add = Signal(providing_args=['translation'])
+unit_pre_create = Signal(providing_args=['unit'])
 user_pre_delete = Signal()
+store_post_load = Signal(providing_args=['store', 'translation'])

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -24,22 +24,22 @@ import os
 import os.path
 
 from django.db import models
-from django.db.models import Sum
 from django.utils.translation import ugettext as _, ugettext_lazy, pgettext
 from django.utils.encoding import python_2_unicode_compatible
 from django.core.exceptions import ValidationError
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.contrib.auth.models import Permission, User, Group
 
 from weblate.accounts.models import Profile
 from weblate.lang.models import Language, get_english_lang
-from weblate.trans.mixins import PercentMixin, URLMixin, PathMixin
-from weblate.trans.site import get_site_url
+from weblate.trans.mixins import URLMixin, PathMixin
+from weblate.utils.stats import ProjectStats
+from weblate.utils.site import get_site_url
 from weblate.trans.data import data_dir
 
 
 class ProjectManager(models.Manager):
-    # pylint: disable=W0232
+    # pylint: disable=no-init
 
     def get_acl_ids(self, user):
         """Return list of project IDs and status
@@ -82,10 +82,11 @@ class ProjectManager(models.Manager):
 
 
 @python_2_unicode_compatible
-class Project(models.Model, PercentMixin, URLMixin, PathMixin):
+class Project(models.Model, URLMixin, PathMixin):
     ACCESS_PUBLIC = 0
     ACCESS_PROTECTED = 1
     ACCESS_PRIVATE = 100
+    ACCESS_CUSTOM = 200
 
     name = models.CharField(
         verbose_name=ugettext_lazy('Project name'),
@@ -95,9 +96,9 @@ class Project(models.Model, PercentMixin, URLMixin, PathMixin):
     )
     slug = models.SlugField(
         verbose_name=ugettext_lazy('URL slug'),
-        db_index=True, unique=True,
+        unique=True,
         max_length=60,
-        help_text=ugettext_lazy('Name used in URLs and file names.')
+        help_text=ugettext_lazy('Name used in URLs and filenames.')
     )
     web = models.URLField(
         verbose_name=ugettext_lazy('Project website'),
@@ -130,11 +131,20 @@ class Project(models.Model, PercentMixin, URLMixin, PathMixin):
             (ACCESS_PUBLIC, ugettext_lazy('Public')),
             (ACCESS_PROTECTED, ugettext_lazy('Protected')),
             (ACCESS_PRIVATE, ugettext_lazy('Private')),
+            (ACCESS_CUSTOM, ugettext_lazy('Custom')),
         ),
         verbose_name=_('Access control'),
         help_text=ugettext_lazy(
             'How to restrict access to this project, please check '
-            'documentation for more details.'
+            'the documentation for more details.'
+        )
+    )
+    enable_review = models.BooleanField(
+        verbose_name=ugettext_lazy('Enable reviews'),
+        default=False,
+        help_text=ugettext_lazy(
+            'Enable this if you intend for dedicated reviewers to '
+            'approve translations.'
         )
     )
     enable_hooks = models.BooleanField(
@@ -151,6 +161,7 @@ class Project(models.Model, PercentMixin, URLMixin, PathMixin):
             'Language used for source strings in all components'
         ),
         default=get_english_lang,
+        on_delete=models.deletion.CASCADE,
     )
 
     objects = ProjectManager()
@@ -170,10 +181,8 @@ class Project(models.Model, PercentMixin, URLMixin, PathMixin):
 
     def __init__(self, *args, **kwargs):
         super(Project, self).__init__(*args, **kwargs)
-        self._totals_cache = None
-
-    def get_full_slug(self):
-        return self.slug
+        self.old_access_control = self.access_control
+        self.stats = ProjectStats(self)
 
     def all_users(self, group=None):
         """Return all users having ACL on this project."""
@@ -230,7 +239,7 @@ class Project(models.Model, PercentMixin, URLMixin, PathMixin):
                 _('Could not create project directory: %s') % str(exc)
             )
 
-    def _reverse_url_kwargs(self):
+    def get_reverse_url_kwargs(self):
         """Return kwargs for URL reversing."""
         return {
             'project': self.slug
@@ -251,7 +260,7 @@ class Project(models.Model, PercentMixin, URLMixin, PathMixin):
     @property
     def locked(self):
         subprojects = self.subproject_set.all()
-        if len(subprojects) == 0:
+        if not subprojects:
             return False
         return max([subproject.locked for subproject in subprojects])
 
@@ -273,59 +282,6 @@ class Project(models.Model, PercentMixin, URLMixin, PathMixin):
 
         super(Project, self).save(*args, **kwargs)
 
-    def _get_percents(self, lang=None):
-        """Return percentages of translation status."""
-        # Import translations
-        from weblate.trans.models.translation import Translation
-
-        # Get percents:
-        return Translation.objects.get_percents(project=self, language=lang)
-
-    def _get_totals(self):
-        """Backend for calculating totals"""
-        if self._totals_cache is None:
-            totals = []
-            words = []
-            for component in self.subproject_set.all():
-                try:
-                    data = component.translation_set.values_list(
-                        'total', 'total_words'
-                    )[0]
-                    totals.append(data[0])
-                    words.append(data[1])
-                except IndexError:
-                    pass
-            self._totals_cache = (sum(totals), sum(words))
-        return self._totals_cache
-
-    def get_total(self):
-        """Calculate total number of strings to translate.
-
-        This is done based on assumption that all languages have same number
-        of strings.
-        """
-        return self._get_totals()[0]
-    get_total.short_description = _('Source strings')
-
-    def get_total_words(self):
-        totals = []
-        for component in self.subproject_set.all():
-            result = component.translation_set.aggregate(
-                Sum('total_words')
-            )['total_words__sum']
-            if result is not None:
-                totals.append(result)
-        return sum(totals)
-
-    def get_source_words(self):
-        """Calculate total number of words to translate.
-
-        This is done based on assumption that all languages have same number
-        of strings.
-        """
-        return self._get_totals()[1]
-    get_source_words.short_description = _('Source words')
-
     def get_languages(self):
         """Return list of all languages used in project."""
         return Language.objects.filter(
@@ -338,7 +294,7 @@ class Project(models.Model, PercentMixin, URLMixin, PathMixin):
     get_language_count.short_description = _('Languages')
 
     def repo_needs_commit(self):
-        """Check whether there are some not committed changes."""
+        """Check whether there are any uncommitted changes."""
         for component in self.subproject_set.all():
             if component.repo_needs_commit():
                 return True

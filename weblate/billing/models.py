@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -47,6 +47,7 @@ class Plan(models.Model):
     display_limit_repositories = models.IntegerField(default=0)
     limit_projects = models.IntegerField(default=0)
     display_limit_projects = models.IntegerField(default=0)
+    change_access_control = models.BooleanField(default=True)
 
     class Meta(object):
         ordering = ['price']
@@ -61,8 +62,13 @@ class Billing(models.Model):
     STATE_TRIAL = 1
     STATE_EXPIRED = 2
 
-    plan = models.ForeignKey(Plan)
-    user = models.OneToOneField(User)
+    plan = models.ForeignKey(
+        Plan,
+        on_delete=models.deletion.CASCADE
+    )
+    user = models.OneToOneField(
+        User, on_delete=models.deletion.CASCADE
+    )
     projects = models.ManyToManyField(Project, blank=True)
     state = models.IntegerField(
         choices=(
@@ -123,7 +129,7 @@ class Billing(models.Model):
 
     def count_strings(self):
         return sum(
-            [p.get_total() for p in self.projects.all()]
+            (p.stats.source_strings for p in self.projects.all())
         )
 
     def display_strings(self):
@@ -135,7 +141,7 @@ class Billing(models.Model):
 
     def count_words(self):
         return sum(
-            [p.get_source_words() for p in self.projects.all()]
+            (p.stats.source_words for p in self.projects.all())
         )
 
     def display_words(self):
@@ -225,7 +231,10 @@ class Invoice(models.Model):
     CURRENCY_USD = 2
     CURRENCY_CZK = 3
 
-    billing = models.ForeignKey(Billing)
+    billing = models.ForeignKey(
+        Billing,
+        on_delete=models.deletion.CASCADE
+    )
     start = models.DateField()
     end = models.DateField()
     payment = models.FloatField()

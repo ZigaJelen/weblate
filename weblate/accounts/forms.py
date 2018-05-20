@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -40,7 +40,8 @@ from django.middleware.csrf import rotate_token
 from django.utils.encoding import force_text
 
 from weblate.accounts.auth import try_get_user
-from weblate.accounts.models import Profile, get_all_user_mails
+from weblate.accounts.models import Profile
+from weblate.accounts.utils import get_all_user_mails
 from weblate.accounts.captcha import MathCaptcha
 from weblate.accounts.notifications import notify_account_activity
 from weblate.accounts.pipeline import USERNAME_RE
@@ -130,7 +131,7 @@ class UsernameField(forms.RegexField):
     def clean(self, value):
         """Username validation, requires unique name."""
         if value is None:
-            return
+            return None
         if value.startswith('.'):
             raise forms.ValidationError(
                 _('Username can not start with full stop.')
@@ -416,7 +417,7 @@ class SetPasswordForm(DjangoSetPasswordForm):
         label=_("New password confirmation"),
     )
 
-    # pylint: disable=W0221,W0222
+    # pylint: disable=arguments-differ,signature-differs
     def save(self, request, delete_session=False):
         notify_account_activity(
             self.user,
@@ -495,7 +496,13 @@ class CaptchaForm(forms.Form):
         )
 
 
-class PasswordConfirmForm(forms.Form):
+class EmptyConfirmForm(forms.Form):
+    def __init__(self, request, *args, **kwargs):
+        self.request = request
+        super(EmptyConfirmForm, self).__init__(*args, **kwargs)
+
+
+class PasswordConfirmForm(EmptyConfirmForm):
     password = PasswordField(
         label=_("Current password"),
         help_text=_(
@@ -503,10 +510,6 @@ class PasswordConfirmForm(forms.Form):
         ),
         required=False,
     )
-
-    def __init__(self, request, *args, **kwargs):
-        self.request = request
-        super(PasswordConfirmForm, self).__init__(*args, **kwargs)
 
     def clean_password(self):
         cur_password = self.cleaned_data['password']
@@ -564,20 +567,19 @@ class LoginForm(forms.Form):
                     _('Too many authentication attempts!')
                 )
             self.user_cache = authenticate(
+                self.request,
                 username=username,
                 password=password
             )
             if self.user_cache is None:
-                try:
+                for user in try_get_user(username, True):
                     notify_account_activity(
-                        try_get_user(username),
+                        user,
                         self.request,
                         'failed-auth',
                         method='Password',
                         name=username,
                     )
-                except User.DoesNotExist:
-                    pass
                 rotate_token(self.request)
                 raise forms.ValidationError(
                     self.error_messages['invalid_login'],

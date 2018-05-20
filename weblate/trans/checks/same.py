@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -22,6 +22,7 @@ from __future__ import unicode_literals
 
 import re
 
+from django.utils.html import strip_tags
 from django.utils.translation import ugettext_lazy as _
 
 from weblate.trans.checks.base import TargetCheck
@@ -30,6 +31,7 @@ from weblate.trans.checks.format import (
     PYTHON_BRACE_MATCH,
 )
 from weblate.trans.checks.data import SAME_BLACKLIST
+from weblate.trans.checks.languages import LANGUAGES
 
 # Email address to ignore
 EMAIL_RE = re.compile(
@@ -60,11 +62,13 @@ PATH_RE = re.compile(r'(^|[ ])(/[a-zA-Z0-9=:?._-]+)+')
 
 TEMPLATE_RE = re.compile(r'{[a-z_-]+}|@[A-Z_]@')
 
-RST_MATCH = re.compile(r'(?::(ref|config:option|file):`[^`]+`|``[^`]+``)')
+RST_MATCH = re.compile(
+    r'(?::(ref|config:option|file|guilabel):`[^`]+`|``[^`]+``)'
+)
 
 SPLIT_RE = re.compile(
     r'(?:\&(?:nbsp|rsaquo|lt|gt|amp|ldquo|rdquo|times|quot);|' +
-    r'[() ,.^`"\'\\/_<>!?;:|{}*^@%#&~=+\r\n✓—…\[\]0-9-])+'
+    r'[() ,.^`"\'\\/_<>!?;:|{}*^@%#&~=+\r\n✓—‑…\[\]0-9-])+'
 )
 
 # Docbook tags to ignore
@@ -98,8 +102,11 @@ def strip_format(msg, flags):
 
 def strip_string(msg, flags):
     """Strip (usually) not translated parts from the string."""
+    # Strip HTML markup
+    stripped = strip_tags(msg)
+
     # Strip format strings
-    stripped = strip_format(msg, flags)
+    stripped = strip_format(stripped, flags)
 
     # Remove email addresses
     stripped = EMAIL_RE.sub('', stripped)
@@ -125,14 +132,14 @@ def strip_string(msg, flags):
 
 def test_word(word):
     """Test whether word should be ignored."""
-    return len(word) <= 2 or word in SAME_BLACKLIST
+    return len(word) <= 2 or word in SAME_BLACKLIST or word in LANGUAGES
 
 
 class SameCheck(TargetCheck):
     """Check for not translated entries."""
     check_id = 'same'
     name = _('Unchanged translation')
-    description = _('Source and translated strings are same')
+    description = _('Source and translation are identical')
     severity = 'warning'
 
     def should_ignore(self, source, unit):

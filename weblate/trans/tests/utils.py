@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -21,15 +21,18 @@
 import os.path
 import shutil
 import stat
+import sys
 from tarfile import TarFile
+from tempfile import mkdtemp
 from unittest import SkipTest
 
 from django.conf import settings
+from django.contrib.auth.models import User
 
 from weblate.trans.formats import FILE_FORMATS
 from weblate.trans.models import Project, SubProject
 from weblate.trans.search import clean_indexes
-from weblate.trans.vcs import HgRepository, SubversionRepository
+from weblate.trans.vcs import VCS_REGISTRY
 
 # Directory holding test data
 TEST_DATA = os.path.join(
@@ -52,7 +55,24 @@ def remove_readonly(func, path, _):
     func(path)
 
 
+def create_test_user():
+    return User.objects.create_user(
+        'testuser',
+        'weblate@example.org',
+        'testpassword',
+        first_name='Weblate Test',
+    )
+
+
 class RepoTestMixin(object):
+    """Mixin for testing with test repositories."""
+    git_base_repo_path = None
+    git_repo_path = None
+    mercurial_base_repo_path = None
+    mercurial_repo_path = None
+    subversion_base_repo_path = None
+    subversion_repo_path = None
+
     @staticmethod
     def optional_extract(output, tarname):
         """Extract test repository data if needed
@@ -90,23 +110,23 @@ class RepoTestMixin(object):
         )
 
         # Path where to clone remote repo for tests
-        self.hg_base_repo_path = os.path.join(
+        self.mercurial_base_repo_path = os.path.join(
             settings.DATA_DIR,
             'test-base-repo.hg'
         )
         # Repository on which tests will be performed
-        self.hg_repo_path = os.path.join(
+        self.mercurial_repo_path = os.path.join(
             settings.DATA_DIR,
             'test-repo.hg'
         )
 
         # Path where to clone remote repo for tests
-        self.svn_base_repo_path = os.path.join(
+        self.subversion_base_repo_path = os.path.join(
             settings.DATA_DIR,
             'test-base-repo.svn'
         )
         # Repository on which tests will be performed
-        self.svn_repo_path = os.path.join(
+        self.subversion_repo_path = os.path.join(
             settings.DATA_DIR,
             'test-repo.svn'
         )
@@ -126,29 +146,34 @@ class RepoTestMixin(object):
 
         # Extract repo for testing
         self.optional_extract(
-            self.hg_base_repo_path,
+            self.mercurial_base_repo_path,
             'test-base-repo.hg.tar'
         )
 
         # Remove possibly existing directory
-        if os.path.exists(self.hg_repo_path):
-            shutil.rmtree(self.hg_repo_path, onerror=remove_readonly)
+        if os.path.exists(self.mercurial_repo_path):
+            shutil.rmtree(self.mercurial_repo_path, onerror=remove_readonly)
 
         # Create repository copy for the test
-        shutil.copytree(self.hg_base_repo_path, self.hg_repo_path)
+        shutil.copytree(
+            self.mercurial_base_repo_path, self.mercurial_repo_path
+        )
 
         # Extract repo for testing
         self.optional_extract(
-            self.svn_base_repo_path,
+            self.subversion_base_repo_path,
             'test-base-repo.svn.tar'
         )
 
         # Remove possibly existing directory
-        if os.path.exists(self.svn_repo_path):
-            shutil.rmtree(self.svn_repo_path, onerror=remove_readonly)
+        if os.path.exists(self.subversion_repo_path):
+            shutil.rmtree(self.subversion_repo_path, onerror=remove_readonly)
 
         # Create repository copy for the test
-        shutil.copytree(self.svn_base_repo_path, self.svn_repo_path)
+        shutil.copytree(
+            self.subversion_base_repo_path,
+            self.subversion_repo_path
+        )
 
         # Remove possibly existing project directory
         test_repo_path = os.path.join(settings.DATA_DIR, 'vcs', 'test')
@@ -165,8 +190,14 @@ class RepoTestMixin(object):
             slug='test',
             web='https://weblate.org/'
         )
-        self.addCleanup(shutil.rmtree, project.get_path(), True)
+        self.addCleanup(shutil.rmtree, project.full_path, True)
         return project
+
+    def format_local_path(self, path):
+        """Format path for local access to the repository"""
+        if sys.platform != 'win32':
+            return 'file://{}'.format(path)
+        return 'file:///{}'.format(path.replace('\\', '/'))
 
     def _create_subproject(self, file_format, mask, template='',
                            new_base='', vcs='git', branch=None, **kwargs):
@@ -178,22 +209,11 @@ class RepoTestMixin(object):
         if 'project' not in kwargs:
             kwargs['project'] = self.create_project()
 
-        if vcs == 'mercurial':
-            d_branch = 'default'
-            repo = self.hg_repo_path
-            push = self.hg_repo_path
-            if not HgRepository.is_supported():
-                raise SkipTest('Mercurial not available!')
-        elif vcs == 'subversion':
-            d_branch = 'master'
-            repo = 'file://' + self.svn_repo_path
-            push = 'file://' + self.svn_repo_path
-            if not SubversionRepository.is_supported():
-                raise SkipTest('Subversion not available!')
-        else:
-            d_branch = 'master'
-            repo = self.git_repo_path
-            push = self.git_repo_path
+        repo = push = self.format_local_path(
+            getattr(self, '{0}_repo_path'.format(vcs))
+        )
+        if vcs not in VCS_REGISTRY:
+            raise SkipTest('VCS {0} not available!'.format(vcs))
 
         if 'new_lang' not in kwargs:
             kwargs['new_lang'] = 'contact'
@@ -202,9 +222,9 @@ class RepoTestMixin(object):
             kwargs['push_on_commit'] = False
 
         if branch is None:
-            branch = d_branch
+            branch = VCS_REGISTRY[vcs].default_branch
 
-        return SubProject.objects.create(
+        result = SubProject.objects.create(
             name='Test',
             slug='test',
             repo=repo,
@@ -219,6 +239,8 @@ class RepoTestMixin(object):
             vcs=vcs,
             **kwargs
         )
+        result.addons_cache = {}
+        return result
 
     def create_subproject(self):
         """Wrapper method for providing test subproject."""
@@ -227,10 +249,11 @@ class RepoTestMixin(object):
             'po/*.po',
         )
 
-    def create_po(self):
+    def create_po(self, **kwargs):
         return self._create_subproject(
             'po',
             'po/*.po',
+            **kwargs
         )
 
     def create_po_branch(self):
@@ -241,9 +264,7 @@ class RepoTestMixin(object):
         )
 
     def create_po_push(self):
-        return self._create_subproject(
-            'po',
-            'po/*.po',
+        return self.create_po(
             push_on_commit=True
         )
 
@@ -256,24 +277,19 @@ class RepoTestMixin(object):
         )
 
     def create_po_mercurial(self):
-        return self._create_subproject(
-            'po',
-            'po/*.po',
+        return self.create_po(
             vcs='mercurial'
         )
 
     def create_po_svn(self):
-        return self._create_subproject(
-            'po',
-            'po/*.po',
+        return self.create_po(
             vcs='subversion'
         )
 
-    def create_po_new_base(self):
-        return self._create_subproject(
-            'po',
-            'po/*.po',
-            new_base='po/hello.pot'
+    def create_po_new_base(self, **kwargs):
+        return self.create_po(
+            new_base='po/hello.pot',
+            **kwargs
         )
 
     def create_po_link(self):
@@ -308,11 +324,12 @@ class RepoTestMixin(object):
             'iphone/*.lproj/Localizable.strings',
         )
 
-    def create_android(self):
+    def create_android(self, suffix='', **kwargs):
         return self._create_subproject(
             'aresource',
-            'android/values-*/strings.xml',
-            'android/values/strings.xml',
+            'android{}/values-*/strings.xml'.format(suffix),
+            'android{}/values/strings.xml'.format(suffix),
+            **kwargs
         )
 
     def create_json(self):
@@ -321,18 +338,12 @@ class RepoTestMixin(object):
             'json/*.json',
         )
 
-    def create_json_mono(self):
+    def create_json_mono(self, suffix='mono', **kwargs):
         return self._create_subproject(
             'json',
-            'json-mono/*.json',
-            'json-mono/en.json',
-        )
-
-    def create_json_nested(self):
-        return self._create_subproject(
-            'json',
-            'json-nested/*.json',
-            'json-nested/en.json',
+            'json-{}/*.json'.format(suffix),
+            'json-{}/en.json'.format(suffix),
+            **kwargs
         )
 
     def create_json_webextension(self):
@@ -416,6 +427,13 @@ class RepoTestMixin(object):
             'ruby-yml/en.yml',
         )
 
+    def create_dtd(self):
+        return self._create_subproject(
+            'dtd',
+            'dtd/*.dtd',
+            'dtd/en.dtd',
+        )
+
     def create_link(self):
         parent = self.create_iphone()
         return SubProject.objects.create(
@@ -427,3 +445,15 @@ class RepoTestMixin(object):
             filemask='po/*.po',
             new_lang='contact',
         )
+
+
+class TempDirMixin(object):
+    tempdir = None
+
+    def create_temp(self):
+        self.tempdir = mkdtemp(suffix='weblate')
+
+    def remove_temp(self):
+        if self.tempdir:
+            shutil.rmtree(self.tempdir, onerror=remove_readonly)
+            self.tempdir = None

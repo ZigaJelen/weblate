@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -26,6 +26,7 @@ import os
 
 from django.core.management.color import no_style
 from django.db import connection
+from django.http.request import HttpRequest
 from django.test import TestCase, LiveServerTestCase
 from django.test.utils import override_settings
 from django.utils import timezone
@@ -34,12 +35,15 @@ from django.core.exceptions import ValidationError
 
 from weblate.trans.models import (
     Project, Source, Unit, WhiteboardMessage, Check, ComponentList,
-    AutoComponentList, get_related_units,
+    AutoComponentList,
 )
 import weblate.trans.models.subproject
 from weblate.lang.models import Language
 from weblate.permissions.helpers import can_access_project
-from weblate.trans.tests.utils import get_test_file, RepoTestMixin
+from weblate.trans.tests.utils import (
+    get_test_file, RepoTestMixin, create_test_user,
+)
+from weblate.utils.state import STATE_TRANSLATED
 
 
 def fixup_languages_seq():
@@ -78,38 +82,38 @@ class ProjectTest(RepoTestCase):
 
     def test_create(self):
         project = self.create_project()
-        self.assertTrue(os.path.exists(project.get_path()))
-        self.assertTrue(project.slug in project.get_path())
+        self.assertTrue(os.path.exists(project.full_path))
+        self.assertTrue(project.slug in project.full_path)
 
     def test_rename(self):
         project = self.create_project()
-        old_path = project.get_path()
+        old_path = project.full_path
         self.assertTrue(os.path.exists(old_path))
         project.slug = 'changed'
         project.save()
-        new_path = project.get_path()
+        new_path = project.full_path
         self.addCleanup(shutil.rmtree, new_path, True)
         self.assertFalse(os.path.exists(old_path))
         self.assertTrue(os.path.exists(new_path))
 
     def test_delete(self):
         project = self.create_project()
-        self.assertTrue(os.path.exists(project.get_path()))
+        self.assertTrue(os.path.exists(project.full_path))
         project.delete()
-        self.assertFalse(os.path.exists(project.get_path()))
+        self.assertFalse(os.path.exists(project.full_path))
 
     def test_delete_all(self):
         project = self.create_project()
-        self.assertTrue(os.path.exists(project.get_path()))
+        self.assertTrue(os.path.exists(project.full_path))
         Project.objects.all().delete()
-        self.assertFalse(os.path.exists(project.get_path()))
+        self.assertFalse(os.path.exists(project.full_path))
 
     def test_wrong_path(self):
         project = self.create_project()
 
-        with override_settings(DATA_DIR='/weblate-nonexisting-path'):
-            # Invalidate cache, pylint: disable=W0212
-            project._dir_path = None
+        with override_settings(DATA_DIR='/weblate-nonexisting:path'):
+            # Invalidate cache
+            project.invalidate_path_cache()
 
             self.assertRaisesMessage(
                 ValidationError,
@@ -120,11 +124,7 @@ class ProjectTest(RepoTestCase):
     def test_acl(self):
         """Test for ACL handling."""
         # Create user to verify ACL
-        user = User.objects.create_user(
-            'testuser',
-            'noreply@example.com',
-            'testpassword'
-        )
+        user = create_test_user()
 
         # Create project
         project = self.create_project()
@@ -151,9 +151,9 @@ class TranslationTest(RepoTestCase):
     def test_basic(self):
         project = self.create_subproject()
         translation = project.translation_set.get(language_code='cs')
-        self.assertEqual(translation.translated, 0)
-        self.assertEqual(translation.total, 4)
-        self.assertEqual(translation.fuzzy, 0)
+        self.assertEqual(translation.stats.translated, 0)
+        self.assertEqual(translation.stats.all, 4)
+        self.assertEqual(translation.stats.fuzzy, 0)
 
     def test_extra_file(self):
         """Test extra commit file handling."""
@@ -176,10 +176,9 @@ class TranslationTest(RepoTestCase):
         # Test committing
         translation.git_commit(
             None, 'TEST <test@example.net>', timezone.now(),
-            force_commit=True
         )
         self.assertFalse(translation.repo_needs_commit())
-        linguas = os.path.join(subproject.get_path(), 'po', 'LINGUAS')
+        linguas = os.path.join(subproject.full_path, 'po', 'LINGUAS')
         with open(linguas, 'r') as handle:
             data = handle.read()
             self.assertIn('\ncs\n', data)
@@ -195,9 +194,29 @@ class TranslationTest(RepoTestCase):
         """Check update stats with no units."""
         project = self.create_subproject()
         translation = project.translation_set.get(language_code='cs')
-        translation.update_stats()
+        self.assertEqual(translation.stats.all, 4)
+        self.assertEqual(translation.stats.all_words, 15)
         translation.unit_set.all().delete()
-        translation.update_stats()
+        translation.invalidate_cache()
+        self.assertEqual(translation.stats.all, 0)
+        self.assertEqual(translation.stats.all_words, 0)
+
+    def test_commit_groupping(self):
+        project = self.create_subproject()
+        translation = project.translation_set.get(language_code='cs')
+        request = HttpRequest()
+        request.user = create_test_user()
+        for unit in translation.unit_set.all():
+            unit.translate(request, 'test2', STATE_TRANSLATED)
+        for unit in translation.unit_set.all():
+            request.user = User.objects.create(
+                first_name='User {}'.format(unit.pk),
+                username='user-{}'.format(unit.pk),
+                email='{}@example.com'.format(unit.pk)
+            )
+            unit.translate(request, 'test', STATE_TRANSLATED)
+
+        translation.commit_pending(None)
 
 
 class ComponentListTest(RepoTestCase):
@@ -286,7 +305,7 @@ class SourceTest(ModelTestCase):
         """Setting of Source check_flags changes checks for related units."""
         self.assertEqual(Check.objects.count(), 3)
         check = Check.objects.all()[0]
-        unit = get_related_units(check)[0]
+        unit = check.related_units[0]
         source = unit.source_info
         source.check_flags = 'ignore-{0}'.format(check.check)
         source.save()

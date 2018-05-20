@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -19,70 +19,14 @@
 #
 
 from django.utils.translation import ugettext as _
-from django.http import JsonResponse
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.views.decorators.http import require_POST
 
 from weblate.utils import messages
 from weblate.trans.util import redirect_param
-from weblate.trans.views.helper import (
-    get_project, get_subproject, get_translation
-)
-from weblate.permissions.helpers import (
-    can_lock_subproject, can_lock_translation
-)
-
-
-@require_POST
-@login_required
-def update_lock(request, project, subproject, lang):
-    obj = get_translation(request, project, subproject, lang)
-
-    if obj.update_lock(request.user, False):
-        return JsonResponse(
-            data={'status': True}
-        )
-
-    response = {
-        'status': False,
-        'message': _('Failed to update lock, probably session has expired.'),
-    }
-
-    return JsonResponse(data=response)
-
-
-@require_POST
-@login_required
-def lock_translation(request, project, subproject, lang):
-    obj = get_translation(request, project, subproject, lang)
-
-    if not can_lock_translation(request.user, obj.subproject.project):
-        raise PermissionDenied()
-
-    if not obj.is_user_locked(request.user):
-        obj.create_lock(request.user, True)
-        messages.success(request, _('Translation is now locked for you.'))
-
-    return redirect_param(obj, '#locking')
-
-
-@require_POST
-@login_required
-def unlock_translation(request, project, subproject, lang):
-    obj = get_translation(request, project, subproject, lang)
-
-    if not can_lock_translation(request.user, obj.subproject.project):
-        raise PermissionDenied()
-
-    if not obj.is_user_locked(request.user):
-        obj.create_lock(None)
-        messages.success(
-            request,
-            _('Translation is now open for translation updates.')
-        )
-
-    return redirect_param(obj, '#locking')
+from weblate.trans.views.helper import get_project, get_subproject
+from weblate.permissions.helpers import can_lock_subproject
 
 
 @require_POST

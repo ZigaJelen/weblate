@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -45,9 +45,24 @@ class GroupACL(models.Model):
     groups = models.ManyToManyField(Group)
 
     # avoid importing Project and SubProject because of circular dependency
-    project = models.ForeignKey('trans.Project', null=True, blank=True)
-    subproject = models.ForeignKey('trans.SubProject', null=True, blank=True)
-    language = models.ForeignKey(Language, null=True, blank=True)
+    project = models.ForeignKey(
+        'trans.Project',
+        null=True,
+        blank=True,
+        on_delete=models.deletion.CASCADE,
+    )
+    subproject = models.ForeignKey(
+        'trans.SubProject',
+        null=True,
+        blank=True,
+        on_delete=models.deletion.CASCADE,
+    )
+    language = models.ForeignKey(
+        Language,
+        null=True,
+        blank=True,
+        on_delete=models.deletion.CASCADE,
+    )
     permissions = models.ManyToManyField(
         Permission,
         verbose_name=_('Filtered permissions'),
@@ -108,6 +123,7 @@ class AutoGroup(models.Model):
     group = models.ForeignKey(
         Group,
         verbose_name=_('Group to assign'),
+        on_delete=models.deletion.CASCADE,
     )
 
     class Meta(object):
@@ -158,8 +174,10 @@ def move_users():
 
 
 @receiver(post_migrate)
-def sync_create_groups(sender, **kwargs):
+def sync_create_groups(sender, intermediate=False, **kwargs):
     """Create groups on syncdb."""
+    if intermediate:
+        return
     # Figure out last app in signals
     for app_config in apps.get_app_configs():
         if app_config.models_module is None:
@@ -213,15 +231,3 @@ def change_acl_groups(sender, instance, action, reverse, model, pk_set,
         # Update their permissions
         for update in related:
             update.permissions.set(perms)
-
-
-# Special hook for LDAP as it does create user without email and updates it
-# later. This can lead to group assignment on every login with
-# AUTH_LDAP_ALWAYS_UPDATE_USER enabled.
-if 'django_auth_ldap.backend.LDAPBackend' in settings.AUTHENTICATION_BACKENDS:
-    # pylint: disable=C0413,E0401
-    from django_auth_ldap.backend import populate_user, LDAPBackend
-
-    @receiver(populate_user, sender=LDAPBackend)
-    def auto_groups_upon_ldap(sender, user, **kwargs):
-        auto_assign_group(user)

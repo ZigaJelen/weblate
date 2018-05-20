@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -24,12 +24,10 @@ from __future__ import unicode_literals
 
 import re
 import shutil
-import tempfile
-import os.path
 from unittest import TestCase
 from whoosh.filedb.filestore import FileStorage
 from whoosh.fields import Schema, ID, TEXT
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.test.utils import override_settings
 from django.http import QueryDict
 
@@ -37,6 +35,8 @@ from weblate.trans.tests.test_views import ViewTestCase
 from weblate.trans.search import update_index_unit, fulltext_search
 import weblate.trans.search
 from weblate.trans.models import IndexUpdate
+from weblate.trans.tests.utils import TempDirMixin
+from weblate.utils.state import STATE_FUZZY, STATE_TRANSLATED
 
 
 class SearchViewTest(ViewTestCase):
@@ -114,7 +114,7 @@ class SearchViewTest(ViewTestCase):
         )
         self.assertContains(
             response,
-            'No matching strings found!'
+            'No matching strings found.'
         )
         response = self.client.get(
             reverse('search'),
@@ -122,7 +122,7 @@ class SearchViewTest(ViewTestCase):
         )
         self.assertContains(
             response,
-            'No matching strings found!'
+            'No matching strings found.'
         )
         response = self.client.get(
             reverse('search'),
@@ -397,18 +397,17 @@ class SearchBackendTest(ViewTestCase):
         self.assertTrue(update.source, True)
 
 
-class SearchMigrationTest(TestCase):
+class SearchMigrationTest(TestCase, TempDirMixin):
     """Search index migration testing"""
     def setUp(self):
-        self.path = tempfile.mkdtemp()
+        self.create_temp()
         self.backup = weblate.trans.search.STORAGE
-        self.storage = FileStorage(self.path)
+        self.storage = FileStorage(self.tempdir)
         weblate.trans.search.STORAGE = self.storage
         self.storage.create()
 
     def tearDown(self):
-        if os.path.exists(self.path):
-            shutil.rmtree(self.path)
+        self.remove_temp()
         weblate.trans.search.STORAGE = self.backup
 
     def do_test(self, source, target):
@@ -446,7 +445,8 @@ class SearchMigrationTest(TestCase):
         self.do_test(None, None)
 
     def test_nonexisting_dir(self):
-        shutil.rmtree(self.path)
+        shutil.rmtree(self.tempdir)
+        self.tempdir = None
         self.do_test(None, None)
 
     def test_current(self):
@@ -556,4 +556,64 @@ class ReplaceTest(ViewTestCase):
     def test_replace_component(self):
         self.do_replace_test(
             reverse('replace', kwargs=self.kw_subproject),
+        )
+
+
+class MassStateTest(ViewTestCase):
+    """Test for mass state change functionality."""
+
+    def setUp(self):
+        super(MassStateTest, self).setUp()
+        self.edit_unit(
+            'Hello, world!\n',
+            'Nazdar svete!\n',
+            fuzzy=True,
+        )
+        self.unit = self.get_unit()
+
+    def do_mass_state_test(self, url, confirm=True):
+        response = self.client.post(
+            url,
+            {
+                'type': 'fuzzy',
+                'state': STATE_TRANSLATED,
+            },
+            follow=True
+        )
+        unit = self.get_unit()
+        self.assertContains(
+            response,
+            'Mass state change completed, 1 string was updated.'
+        )
+        self.assertEqual(unit.state, STATE_TRANSLATED)
+
+    def test_no_match(self):
+        response = self.client.post(
+            reverse('state-change', kwargs=self.kw_project),
+            {
+                'type': 'approved',
+                'state': STATE_FUZZY,
+            },
+            follow=True
+        )
+        self.assertContains(
+            response,
+            'Mass state change completed, no strings were updated.'
+        )
+        unit = self.get_unit()
+        self.assertEqual(unit.state, STATE_FUZZY)
+
+    def test_mass_state(self):
+        self.do_mass_state_test(
+            reverse('state-change', kwargs=self.kw_translation),
+        )
+
+    def test_mass_state_project(self):
+        self.do_mass_state_test(
+            reverse('state-change', kwargs=self.kw_project),
+        )
+
+    def test_mass_state_component(self):
+        self.do_mass_state_test(
+            reverse('state-change', kwargs=self.kw_subproject),
         )

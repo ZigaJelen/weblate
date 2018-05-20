@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -20,7 +20,7 @@
 
 """Test for settings management."""
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 from weblate.trans.models import Project, SubProject
 from weblate.trans.tests.test_views import ViewTestCase
@@ -61,8 +61,7 @@ class SettingsTest(ViewTestCase):
         response = self.client.get(url)
         self.assertContains(response, 'Settings')
         data = {}
-        for form in response.context['settings_forms']:
-            data.update(form.initial)
+        data.update(response.context['form'].initial)
         data['license_url'] = 'https://example.com/test/'
         data['license'] = 'test'
         response = self.client.post(url, data, follow=True)

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -20,11 +20,11 @@
 
 from __future__ import unicode_literals
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.contrib.auth.decorators import login_required
-from django.db.models import Sum, Count, F
+from django.db.models import Sum, Count
 from django.http import HttpResponse
-from django.shortcuts import redirect
+from django.shortcuts import redirect, get_object_or_404
 from django.utils import translation
 from django.views.decorators.cache import never_cache
 from django.utils.encoding import force_text
@@ -36,53 +36,53 @@ from django.utils.translation.trans_real import parse_accept_lang_header
 import django.views.defaults
 
 from weblate.utils import messages
+from weblate.utils.stats import prefetch_stats
 from weblate.trans.models import (
-    Project, Translation, Check, ComponentList, Change, Unit,
+    Project, Translation, Check, ComponentList, Change, Unit, IndexUpdate,
 )
 from weblate.requirements import get_versions, get_optional_versions
 from weblate.lang.models import Language
 from weblate.trans.forms import (
     get_upload_form, SearchForm, SiteSearchForm,
     AutoForm, ReviewForm, get_new_language_form,
-    ReportsForm, ReplaceForm,
+    ReportsForm, ReplaceForm, NewUnitForm, MassStateForm,
 )
 from weblate.permissions.helpers import (
     can_automatic_translation, can_translate,
 )
 from weblate.accounts.models import Profile
 from weblate.accounts.notifications import notify_new_language
-from weblate.trans.stats import get_per_language_stats
 from weblate.trans.views.helper import (
     get_project, get_subproject, get_translation,
     try_set_language,
 )
-from weblate.trans.util import (
-    render, sort_objects, sort_unicode, translation_percent,
-)
-import weblate
+from weblate.trans.util import render, sort_objects, sort_unicode
+
+
+def get_untranslated(base, limit=None):
+    """Filter untranslated."""
+    result = []
+    for item in prefetch_stats(base):
+        if item.stats.translated != item.stats.all:
+            result.append(item)
+            if limit and len(result) >= limit:
+                return result
+    return result
 
 
 def get_suggestions(request, user, base):
     """Return suggested translations for user"""
-
-    # Grab all untranslated translations
-    result = base.exclude(
-        total=F('translated'),
-    ).order_by(
-        '-translated'
-    )
-
     if user.is_authenticated and user.profile.languages.exists():
         # Remove user subscriptions
-        result = result.exclude(
-            subproject__project__in=user.profile.subscriptions.all()
+        result = get_untranslated(
+            base.exclude(
+                subproject__project__in=user.profile.subscriptions.all()
+            ),
+            10
         )
-
-    result = result[:10]
-
-    if result:
-        return result
-    return base.order_by('?')[:10]
+        if result:
+            return result
+    return get_untranslated(base.order_by('?'), 10)
 
 
 def guess_user_language(request, translations):
@@ -130,21 +130,25 @@ def get_user_translations(request, user, project_ids):
     """
     result = Translation.objects.prefetch().filter(
         subproject__project_id__in=project_ids
+    ).order_by(
+        'subproject__priority',
+        'subproject__project__name',
+        'subproject__name'
     )
+
     if user.is_authenticated and user.profile.languages.exists():
         result = result.filter(
             language__in=user.profile.languages.all(),
         )
     else:
         # Filter based on session language
-        result = result.filter(
+        tmp = result.filter(
             language=guess_user_language(request, result)
         )
-    return result.order_by(
-        'subproject__priority',
-        'subproject__project__name',
-        'subproject__name'
-    )
+        if tmp:
+            return tmp
+
+    return result
 
 
 @never_cache
@@ -195,10 +199,12 @@ def home(request):
 
     usersubscriptions = None
 
-    componentlists = list(ComponentList.objects.all())
+    componentlists = list(ComponentList.objects.filter(show_dashboard=True))
     for componentlist in componentlists:
-        componentlist.translations = user_translations.filter(
-            subproject__in=componentlist.components.all()
+        componentlist.translations = prefetch_stats(
+            user_translations.filter(
+                subproject__in=componentlist.components.all()
+            )
         )
     # Filter out component lists with translations
     # This will remove the ones where user doesn't have access to anything
@@ -221,12 +227,13 @@ def home(request):
         )
 
         if user.profile.hide_completed:
-            usersubscriptions = usersubscriptions.exclude(
-                total=F('translated')
-            )
-            user_translations = user_translations.exclude(
-                total=F('translated')
-            )
+            usersubscriptions = get_untranslated(usersubscriptions)
+            user_translations = get_untranslated(user_translations)
+            for componentlist in componentlists:
+                componentlist.translations = get_untranslated(
+                    componentlist.translations
+                )
+        usersubscriptions = prefetch_stats(usersubscriptions)
 
     return render(
         request,
@@ -236,8 +243,9 @@ def home(request):
             'suggestions': suggestions,
             'search_form': SiteSearchForm(),
             'usersubscriptions': usersubscriptions,
-            'userlanguages': user_translations,
+            'userlanguages': prefetch_stats(user_translations),
             'componentlists': componentlists,
+            'all_componentlists': prefetch_stats(ComponentList.objects.all()),
             'active_tab_slug': active_tab_slug,
         }
     )
@@ -252,7 +260,7 @@ def list_projects(request):
         'projects.html',
         {
             'allow_index': True,
-            'projects': Project.objects.all_acl(request.user),
+            'projects': prefetch_stats(Project.objects.all_acl(request.user)),
             'title': _('Projects'),
         }
     )
@@ -263,10 +271,16 @@ def show_engage(request, project, lang=None):
     obj = get_project(request, project, skip_acl=True)
 
     # Handle language parameter
-    language = None
     if lang is not None:
-        try_set_language(lang)
         language = Language.objects.try_get(code=lang)
+    else:
+        language = None
+    if language:
+        try_set_language(lang)
+        stats_obj = obj.stats.get_single_language_stats(language)
+    else:
+        stats_obj = obj.stats
+    percent = stats_obj.translated_percent
 
     languages = obj.get_language_count()
 
@@ -275,9 +289,10 @@ def show_engage(request, project, lang=None):
         'object': obj,
         'project': obj,
         'languages': languages,
-        'total': obj.get_total(),
-        'percent': obj.get_translated_percent(language),
+        'total': obj.stats.source_strings,
+        'percent': percent,
         'url': obj.get_absolute_url(),
+        'lang_url': obj.get_absolute_url() + '#languages',
         'language': language,
         'title': _('Get involved in {0}!').format(obj),
     }
@@ -287,11 +302,12 @@ def show_engage(request, project, lang=None):
         status_text = _(
             '<a href="%(url)s">Translation project for %(project)s</a> '
             'currently contains %(total)s strings for translation and is '
-            '<a href="%(url)s">being translated into %(languages)s languages'
-            '</a>. Overall, these translations are %(percent)s%% complete.'
+            '<a href="%(lang_url)s">being translated into %(languages)s '
+            'languages</a>. Overall, these translations are %(percent)s%% '
+            'complete.'
         )
     else:
-        # Translators: line of text in engagement widget, please use your
+        # Translators: line of text in engagement page, please use your
         # language name instead of English
         status_text = _('<a href="%(url)s">Translation project for '
                         '%(project)s</a> into English currently contains '
@@ -320,22 +336,15 @@ def show_project(request, project):
     last_changes = Change.objects.for_project(obj)[:10]
 
     language_stats = sort_unicode(
-        get_per_language_stats(obj), lambda tup: force_text(tup[0])
+        obj.stats.get_language_stats(), lambda x: force_text(x.language.name)
     )
-
-    language_stats = [
-        (
-            tup[0],
-            translation_percent(tup[1], tup[2]),
-            translation_percent(tup[3], tup[4])
-        )
-        for tup in language_stats
-    ]
 
     if can_translate(request.user, project=obj):
         replace_form = ReplaceForm()
+        mass_state_form = MassStateForm(request.user, obj)
     else:
         replace_form = None
+        mass_state_form = None
 
     return render(
         request,
@@ -350,17 +359,13 @@ def show_project(request, project):
                 {'project': obj.slug}
             ),
             'language_stats': language_stats,
-            'unit_count': Unit.objects.filter(
-                translation__subproject__project=obj
-            ).count(),
-            'words_count': obj.get_total_words(),
             'language_count': Language.objects.filter(
                 translation__subproject__project=obj
             ).distinct().count(),
-            'strings_count': obj.get_total(),
-            'source_words_count': obj.get_source_words(),
             'search_form': SearchForm(),
             'replace_form': replace_form,
+            'mass_state_form': mass_state_form,
+            'components': prefetch_stats(obj.subproject_set.select_related()),
         }
     )
 
@@ -371,18 +376,12 @@ def show_subproject(request, project, subproject):
 
     last_changes = Change.objects.for_component(obj)[:10]
 
-    try:
-        sample = obj.translation_set.all()[0]
-        source_words = sample.total_words
-        total_strings = sample.total
-    except IndexError:
-        source_words = 0
-        total_strings = 0
-
     if can_translate(request.user, project=obj.project):
         replace_form = ReplaceForm()
+        mass_state_form = MassStateForm(request.user, obj)
     else:
         replace_form = None
+        mass_state_form = None
 
     return render(
         request,
@@ -391,23 +390,20 @@ def show_subproject(request, project, subproject):
             'allow_index': True,
             'object': obj,
             'project': obj.project,
-            'translations': sort_objects(obj.translation_set.enabled()),
+            'translations': sort_objects(
+                prefetch_stats(obj.translation_set.all())
+            ),
             'show_language': 1,
             'reports_form': ReportsForm(),
             'last_changes': last_changes,
             'last_changes_url': urlencode(
                 {'subproject': obj.slug, 'project': obj.project.slug}
             ),
-            'unit_count': Unit.objects.filter(
-                translation__subproject=obj
-            ).count(),
-            'words_count': obj.get_total_words(),
             'language_count': Language.objects.filter(
                 translation__subproject=obj
             ).distinct().count(),
-            'strings_count': total_strings,
-            'source_words_count': source_words,
             'replace_form': replace_form,
+            'mass_state_form': mass_state_form,
             'search_form': SearchForm(),
         }
     )
@@ -416,10 +412,8 @@ def show_subproject(request, project, subproject):
 @never_cache
 def show_translation(request, project, subproject, lang):
     obj = get_translation(request, project, subproject, lang)
+    obj.stats.ensure_all()
     last_changes = Change.objects.for_translation(obj)[:10]
-
-    # Check locks
-    obj.is_locked(request.user)
 
     # Get form
     form = get_upload_form(request.user, obj)
@@ -441,9 +435,12 @@ def show_translation(request, project, subproject, lang):
             initial={'exclude_user': request.user.username}
         )
 
-    replace_form = None
-    if can_translate(request.user, obj):
+    if can_translate(request.user, translation=obj):
         replace_form = ReplaceForm()
+        mass_state_form = MassStateForm(request.user, obj)
+    else:
+        replace_form = None
+        mass_state_form = None
 
     return render(
         request,
@@ -457,20 +454,34 @@ def show_translation(request, project, subproject, lang):
             'search_form': search_form,
             'review_form': review_form,
             'replace_form': replace_form,
+            'mass_state_form': mass_state_form,
+            'new_unit_form': NewUnitForm(
+                request.user,
+                initial={
+                    'value': Unit(translation=obj, id_hash=-1),
+                },
+            ),
             'last_changes': last_changes,
             'last_changes_url': urlencode(obj.get_kwargs()),
             'show_only_component': True,
-            'other_translations': Translation.objects.prefetch().filter(
-                subproject__project=obj.subproject.project,
-                language=obj.language,
-            ).exclude(
-                pk=obj.pk
+            'pending_fulltext': obj.unit_set.filter(
+                id__in=IndexUpdate.objects.filter(
+                    to_delete=False
+                ).values('unitid')
+            ).exists(),
+            'other_translations': prefetch_stats(
+                Translation.objects.prefetch().filter(
+                    subproject__project=obj.subproject.project,
+                    language=obj.language,
+                ).exclude(
+                    pk=obj.pk
+                )
             ),
         }
     )
 
 
-def not_found(request):
+def not_found(request, exception=None):
     """Error handler showing list of available projects."""
     return render(
         request,
@@ -483,7 +494,7 @@ def not_found(request):
     )
 
 
-def denied(request):
+def denied(request, exception=None):
     """Error handler showing list of available projects."""
     return render(
         request,
@@ -537,9 +548,9 @@ def stats(request):
     )
     total_strings = []
     total_words = []
-    for project in Project.objects.iterator():
-        total_strings.append(project.get_total())
-        total_words.append(project.get_source_words())
+    for project in prefetch_stats(Project.objects.all()):
+        total_strings.append(project.stats.source_strings)
+        total_words.append(project.stats.source_words)
 
     context['total_translations'] = totals['translated__sum']
     context['total_suggestions'] = totals['suggested__sum']
@@ -548,7 +559,7 @@ def stats(request):
     context['total_units'] = Unit.objects.count()
     context['total_words'] = sum(total_words)
     context['total_languages'] = Language.objects.filter(
-        translation__total__gt=0
+        translation__pk__gt=0
     ).distinct().count()
     context['total_checks'] = Check.objects.count()
     context['ignored_checks'] = Check.objects.filter(ignore=True).count()
@@ -568,15 +579,7 @@ def stats(request):
 
 @never_cache
 def data_root(request):
-    return render(
-        request,
-        'data-root.html',
-        {
-            'hooks_docs': weblate.get_doc_url('api', 'hooks'),
-            'api_docs': weblate.get_doc_url('api'),
-            'rss_docs': weblate.get_doc_url('api', 'rss'),
-        }
-    )
+    return render(request, 'data-root.html')
 
 
 @never_cache
@@ -588,9 +591,6 @@ def data_project(request, project):
         {
             'object': obj,
             'project': obj,
-            'hooks_docs': weblate.get_doc_url('api', 'hooks'),
-            'api_docs': weblate.get_doc_url('api'),
-            'rss_docs': weblate.get_doc_url('api', 'rss'),
         }
     )
 
@@ -643,3 +643,16 @@ def new_language(request, project, subproject):
 def healthz(request):
     """Simple health check endpoint"""
     return HttpResponse('ok')
+
+
+@never_cache
+def show_component_list(request, name):
+    obj = get_object_or_404(ComponentList, slug=name)
+
+    return render(
+        request,
+        'component-list.html',
+        {
+            'object': obj,
+        }
+    )

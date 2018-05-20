@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -19,36 +19,35 @@
 #
 
 from __future__ import unicode_literals
-import json
-import os
-import binascii
+
 import datetime
 
 from django.db import models
 from django.dispatch import receiver
 from django.conf import settings
-from django.contrib.auth.signals import user_logged_in, user_logged_out
+from django.contrib.auth.signals import user_logged_in
 from django.core.exceptions import ValidationError
 from django.db.models.signals import post_save
 from django.utils.translation import ugettext_lazy as _
 from django.utils.encoding import python_2_unicode_compatible
 from django.contrib.auth.models import User
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.crypto import get_random_string
-from django.utils.deprecation import CallableFalse, CallableTrue
 from django.utils.translation import LANGUAGE_SESSION_KEY
 
 from rest_framework.authtoken.models import Token
 
-from social_django.models import UserSocialAuth, Code
+from social_django.models import UserSocialAuth
 
 from weblate.lang.models import Language
 from weblate.utils import messages
 from weblate.accounts.avatar import get_user_display
-from weblate.trans.signals import user_pre_delete
 from weblate.utils.validators import validate_editor
 from weblate.utils.decorators import disable_for_loaddata
+from weblate.utils.fields import JSONField
 
+DEMO_ACCOUNTS = ('demo', 'review')
 
 ACCOUNT_ACTIVITY = {
     'password': _(
@@ -67,7 +66,10 @@ ACCOUNT_ACTIVITY = {
         'Authentication using {method} ({name}) has been removed.'
     ),
     'login': _(
-        'Successfully authenticated using {method} ({name}).'
+        'Authenticated using {method} ({name}).'
+    ),
+    'login-new': _(
+        'Authenticated using {method} ({name}) from new device.'
     ),
     'register': _(
         'Somebody has attempted to register with your email.'
@@ -89,6 +91,12 @@ ACCOUNT_ACTIVITY = {
     ),
 }
 
+EXTRA_MESSAGES = {
+    'locked': _(
+        'To restore access to your account, please reset your password.'
+    ),
+}
+
 NOTIFY_ACTIVITY = frozenset((
     'password',
     'reset',
@@ -98,26 +106,23 @@ NOTIFY_ACTIVITY = frozenset((
     'connect',
     'locked',
     'removed',
+    'login-new',
 ))
 
 
 class WeblateAnonymousUser(User):
-    """Proxy model to customize User behavior.
+    """Proxy model to customize User behavior."""
 
-    TODO: Remove Callable* return values and replace them with booleans once
-    djangp-rest-framework supports this (changed in Django 1.10).
-    """
-
-    class Meta:
+    class Meta(object):
         proxy = True
 
     @property
     def is_authenticated(self):
-        return CallableFalse
+        return False
 
     @property
     def is_anonymous(self):
-        return CallableTrue
+        return True
 
 
 def get_anonymous():
@@ -146,12 +151,13 @@ def get_author_name(user, email=True):
 
 
 class AuditLogManager(models.Manager):
-    def create(self, user, activity, address, **params):
+    def create(self, user, activity, address, user_agent, **params):
         return super(AuditLogManager, self).create(
             user=user,
             activity=activity,
             address=address,
-            params=json.dumps(params)
+            user_agent=user_agent,
+            params=params
         )
 
 
@@ -187,14 +193,18 @@ class AuditLogQuerySet(models.QuerySet):
 class AuditLog(models.Model):
     """User audit log storage."""
 
-    user = models.ForeignKey(User)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.deletion.CASCADE,
+    )
     activity = models.CharField(
         max_length=20,
         choices=[(a, a) for a in sorted(ACCOUNT_ACTIVITY.keys())],
         db_index=True,
     )
-    params = models.TextField()
+    params = JSONField()
     address = models.GenericIPAddressField()
+    user_agent = models.CharField(max_length=200, default='')
     timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
 
     objects = AuditLogManager.from_queryset(AuditLogQuerySet)()
@@ -204,12 +214,16 @@ class AuditLog(models.Model):
 
     def get_message(self):
         return ACCOUNT_ACTIVITY[self.activity].format(
-            **self.get_params()
+            **self.params
         )
     get_message.short_description = _('Account activity')
 
-    def get_params(self):
-        return json.loads(self.params)
+    def get_extra_message(self):
+        if self.activity in EXTRA_MESSAGES:
+            return EXTRA_MESSAGES[self.activity].format(
+                **self.params
+            )
+        return None
 
     def should_notify(self):
         return self.activity in NOTIFY_ACTIVITY
@@ -226,7 +240,10 @@ class AuditLog(models.Model):
 class VerifiedEmail(models.Model):
     """Storage for verified emails from auth backends."""
 
-    social = models.ForeignKey(UserSocialAuth)
+    social = models.ForeignKey(
+        UserSocialAuth,
+        on_delete=models.deletion.CASCADE,
+    )
     email = models.EmailField(max_length=254)
 
     def __str__(self):
@@ -238,7 +255,7 @@ class VerifiedEmail(models.Model):
 
 class ProfileManager(models.Manager):
     """Manager providing shortcuts for subscription queries."""
-    # pylint: disable=W0232
+    # pylint: disable=no-init
 
     def subscribed_any_translation(self, project, language, user):
         return self.filter(
@@ -304,7 +321,9 @@ class ProfileManager(models.Manager):
 class Profile(models.Model):
     """User profiles storage."""
 
-    user = models.OneToOneField(User, unique=True, editable=False)
+    user = models.OneToOneField(
+        User, unique=True, editable=False, on_delete=models.deletion.CASCADE
+    )
     language = models.CharField(
         verbose_name=_('Interface Language'),
         max_length=10,
@@ -370,10 +389,12 @@ class Profile(models.Model):
     DASHBOARD_LANGUAGES = 2
     DASHBOARD_COMPONENT_LIST = 4
     DASHBOARD_SUGGESTIONS = 5
+    DASHBOARD_COMPONENT_LISTS = 6
 
     DASHBOARD_CHOICES = (
         (DASHBOARD_WATCHED, _('Watched translations')),
         (DASHBOARD_LANGUAGES, _('Your languages')),
+        (DASHBOARD_COMPONENT_LISTS, _('Component lists')),
         (DASHBOARD_COMPONENT_LIST, _('Component list')),
         (DASHBOARD_SUGGESTIONS, _('Suggested translations')),
     )
@@ -383,6 +404,7 @@ class Profile(models.Model):
         DASHBOARD_LANGUAGES: 'your-languages',
         DASHBOARD_COMPONENT_LIST: 'list',
         DASHBOARD_SUGGESTIONS: 'suggestions',
+        DASHBOARD_COMPONENT_LISTS: 'componentlists'
     }
 
     DASHBOARD_SLUGMAP = {
@@ -398,6 +420,7 @@ class Profile(models.Model):
     dashboard_component_list = models.ForeignKey(
         'trans.ComponentList',
         verbose_name=_('Default component list'),
+        on_delete=models.deletion.CASCADE,
         blank=True,
         null=True,
     )
@@ -465,11 +488,8 @@ class Profile(models.Model):
     def get_user_name(self):
         return get_user_display(self.user, False)
 
-    @models.permalink
     def get_absolute_url(self):
-        return ('user_page', (), {
-            'user': self.user.username
-        })
+        return reverse('user_page', kwargs={'user': self.user.username})
 
     @property
     def last_change(self):
@@ -486,6 +506,10 @@ class Profile(models.Model):
 
     def clean(self):
         """Check if component list is selected when required."""
+        # This is used for form validation as well, but those
+        # will not contain all fields
+        if not hasattr(self, 'dashboard_component_list'):
+            return
         if (self.dashboard_view == Profile.DASHBOARD_COMPONENT_LIST and
                 self.dashboard_component_list is None):
             raise ValidationError({
@@ -506,64 +530,17 @@ def set_lang(request, profile):
         request.session[LANGUAGE_SESSION_KEY] = profile.language
 
 
-def get_all_user_mails(user):
-    """Return all verified mails for user."""
-    emails = set(
-        VerifiedEmail.objects.filter(
-            social__user=user
-        ).values_list(
-            'email', flat=True
-        )
-    )
-    emails.add(user.email)
-    return emails
-
-
-def remove_user(user, request):
-    """Remove user account."""
-    from weblate.accounts.notifications import notify_account_activity
-
-    # Send signal (to commit any pending changes)
-    user_pre_delete.send(instance=user, sender=user.__class__)
-
-    # Store activity log and notify
-    notify_account_activity(user, request, 'removed')
-
-    # Remove any email validation codes
-    Code.objects.filter(email__in=get_all_user_mails(user)).delete()
-
-    # Change username
-    user.username = 'deleted-{0}'.format(user.pk)
-    while User.objects.filter(username=user.username).exists():
-        user.username = 'deleted-{0}-{1}'.format(
-            user.pk,
-            binascii.b2a_hex(os.urandom(5))
-        )
-
-    # Remove user information
-    user.first_name = 'Deleted User'
-    user.last_name = ''
-    user.email = 'noreply@weblate.org'
-
-    # Disable the user
-    user.is_active = False
-    user.set_unusable_password()
-    user.save()
-
-    # Remove all social auth associations
-    user.social_auth.all().delete()
-
-    # Remove user from all groups
-    user.groups.clear()
-
-
 @receiver(user_logged_in)
 def post_login_handler(sender, request, user, **kwargs):
     """Signal handler for post login.
 
     It sets user language and migrates profile if needed.
     """
-    is_email_auth = getattr(user, 'backend', '').endswith('.EmailAuth')
+    backend_name = getattr(user, 'backend', '')
+    is_email_auth = (
+        backend_name.endswith('.EmailAuth') or
+        backend_name.endswith('.WeblateUserBackend')
+    )
 
     # Warning about setting password
     if is_email_auth and not user.has_usable_password():
@@ -573,6 +550,7 @@ def post_login_handler(sender, request, user, **kwargs):
     profile = Profile.objects.get_or_create(user=user)[0]
 
     # Migrate django-registration based verification to python-social-auth
+    # and handle external authentication such as LDAP
     if (is_email_auth and user.has_usable_password() and user.email and
             not user.social_auth.filter(provider='email').exists()):
         social = user.social_auth.create(
@@ -587,6 +565,14 @@ def post_login_handler(sender, request, user, **kwargs):
     # Set language for session based on preferences
     set_lang(request, profile)
 
+    # Fixup accounts with empty name
+    if not user.first_name:
+        if user.last_name:
+            user.first_name = user.last_name
+        else:
+            user.first_name = user.username
+        user.save(update_fields=['first_name'])
+
     # Warn about not set email
     if not user.email:
         messages.error(
@@ -596,13 +582,6 @@ def post_login_handler(sender, request, user, **kwargs):
                 'you do not have assigned any email address.'
             )
         )
-
-
-@receiver(user_logged_out)
-def post_logout_handler(sender, request, user, **kwargs):
-    # Unlock translations on logout
-    for translation in user.translation_set.all():
-        translation.create_lock(None)
 
 
 @receiver(post_save, sender=User)
@@ -617,3 +596,12 @@ def create_profile_callback(sender, instance, created=False, **kwargs):
         )
         # Create profile
         Profile.objects.get_or_create(user=instance)
+        # Generate full name from parts
+        # This is needed with LDAP authentication when the
+        # server does not contain full name
+        if (instance.first_name and instance.last_name and
+                instance.last_name not in instance.first_name):
+            instance.first_name = '{} {}'.format(
+                instance.first_name, instance.last_name
+            )
+            instance.save(update_fields=['first_name'])

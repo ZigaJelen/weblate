@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -42,7 +42,7 @@ class SameCheckTest(CheckTestCase):
     def test_same_source_language(self):
         unit = MockUnit(code='en')
         # Is template
-        unit.translation.template = True
+        unit.translation.is_template = True
         self.assertTrue(self.check.should_skip(unit))
         # Is same as source
         unit.translation.template = False

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -35,7 +35,7 @@ class DummyTranslation(MachineTranslation):
         """Dummy translation supports just single phrase."""
         if source == 'en' and text.strip() == 'Hello, world!':
             return [
-                ('Nazdar světe!', 100, 'Dummy', text),
-                ('Ahoj světe!', 100, 'Dummy', text),
+                ('Nazdar světe!', self.max_score, 'Dummy', text),
+                ('Ahoj světe!', self.max_score, 'Dummy', text),
             ]
         return []

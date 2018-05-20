@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -23,7 +23,7 @@ Tests for sugestion views.
 """
 
 from django.conf import settings
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 from weblate.trans.models import Suggestion
 from weblate.trans.tests.test_views import ViewTestCase
@@ -71,14 +71,14 @@ class SuggestionsTest(ViewTestCase):
             language_code='cs'
         )
         # Check number of suggestions
-        self.assertEqual(translation.have_suggestion, 1)
+        self.assertEqual(translation.stats.suggestions, 1)
         self.assert_backend(0)
 
         # Unit should not be translated
         self.assertEqual(len(unit.checks()), 0)
         self.assertFalse(unit.translated)
         self.assertFalse(unit.fuzzy)
-        self.assertEqual(len(self.get_unit().suggestions()), 2)
+        self.assertEqual(len(self.get_unit().suggestions), 2)
 
     def test_add_same(self):
         translate_url = reverse('translate', kwargs=self.kw_translation)
@@ -98,14 +98,14 @@ class SuggestionsTest(ViewTestCase):
         )
 
         # Check number of suggestions
-        self.assertEqual(translation.have_suggestion, 1)
+        self.assertEqual(translation.stats.suggestions, 1)
         self.assert_backend(0)
 
         # Unit should not be translated
         self.assertEqual(len(unit.checks()), 0)
         self.assertFalse(unit.translated)
         self.assertFalse(unit.fuzzy)
-        self.assertEqual(len(self.get_unit().suggestions()), 1)
+        self.assertEqual(len(self.get_unit().suggestions), 1)
 
     def test_delete(self):
         translate_url = reverse('translate', kwargs=self.kw_translation)
@@ -114,7 +114,7 @@ class SuggestionsTest(ViewTestCase):
         self.add_suggestion_2()
 
         # Get ids of created suggestions
-        suggestions = self.get_unit().suggestions().values_list(
+        suggestions = self.get_unit().suggestions.values_list(
             'pk', flat=True
         )
         self.assertEqual(len(suggestions), 2)
@@ -128,7 +128,7 @@ class SuggestionsTest(ViewTestCase):
         self.assert_redirects_offset(response, translate_url, 0)
 
         # Ensure we have just one
-        suggestions = self.get_unit().suggestions().values_list(
+        suggestions = self.get_unit().suggestions.values_list(
             'pk', flat=True
         )
         self.assertEqual(len(suggestions), 1)
@@ -139,7 +139,7 @@ class SuggestionsTest(ViewTestCase):
         self.add_suggestion_1()
 
         # Get ids of created suggestions
-        suggestion = self.get_unit().suggestions()[0].pk
+        suggestion = self.get_unit().suggestions[0].pk
 
         # Accept one of suggestions
         response = self.edit_unit(
@@ -156,7 +156,7 @@ class SuggestionsTest(ViewTestCase):
         self.add_suggestion_2()
 
         # Get ids of created suggestions
-        suggestions = self.get_unit().suggestions()
+        suggestions = self.get_unit().suggestions
         self.assertEqual(suggestions.count(), 2)
 
         # Accept one of suggestions
@@ -173,7 +173,7 @@ class SuggestionsTest(ViewTestCase):
             language_code='cs'
         )
         # Check number of suggestions
-        self.assertEqual(translation.have_suggestion, 1)
+        self.assertEqual(translation.stats.suggestions, 1)
 
         # Unit should be translated
         self.assertEqual(len(unit.checks()), 0)
@@ -181,7 +181,7 @@ class SuggestionsTest(ViewTestCase):
         self.assertFalse(unit.fuzzy)
         self.assertEqual(unit.target, 'Ahoj svete!\n')
         self.assert_backend(1)
-        self.assertEqual(len(self.get_unit().suggestions()), 1)
+        self.assertEqual(len(self.get_unit().suggestions), 1)
 
     def test_accept_anonymous(self):
         translate_url = reverse('translate', kwargs=self.kw_translation)
@@ -192,7 +192,7 @@ class SuggestionsTest(ViewTestCase):
         self.client.login(username='testuser', password='testpassword')
 
         # Get ids of created suggestion
-        suggestions = list(self.get_unit().suggestions())
+        suggestions = list(self.get_unit().suggestions)
         self.assertEqual(len(suggestions), 1)
 
         self.assertEqual(
@@ -214,7 +214,7 @@ class SuggestionsTest(ViewTestCase):
             language_code='cs'
         )
         # Check number of suggestions
-        self.assertEqual(translation.have_suggestion, 0)
+        self.assertEqual(translation.stats.suggestions, 0)
 
         # Unit should be translated
         self.assertEqual(unit.target, 'Nazdar svete!\n')
@@ -227,14 +227,14 @@ class SuggestionsTest(ViewTestCase):
 
         self.add_suggestion_1()
 
-        suggestion_id = self.get_unit().suggestions()[0].pk
+        suggestion_id = self.get_unit().suggestions[0].pk
 
         response = self.edit_unit(
             'Hello, world!\n',
             '',
             upvote=suggestion_id,
         )
-        self.assert_redirects_offset(response, translate_url, 0)
+        self.assert_redirects_offset(response, translate_url, 1)
 
         suggestion = Suggestion.objects.get(pk=suggestion_id)
         self.assertEqual(
@@ -263,14 +263,14 @@ class SuggestionsTest(ViewTestCase):
         self.subproject.suggestion_autoaccept = 1
         self.subproject.save()
 
-        suggestion_id = self.get_unit().suggestions()[0].pk
+        suggestion_id = self.get_unit().suggestions[0].pk
 
         response = self.edit_unit(
             'Hello, world!\n',
             '',
             upvote=suggestion_id,
         )
-        self.assert_redirects_offset(response, translate_url, 0)
+        self.assert_redirects_offset(response, translate_url, 1)
 
         # Reload from database
         unit = self.get_unit()
@@ -278,7 +278,7 @@ class SuggestionsTest(ViewTestCase):
             language_code='cs'
         )
         # Check number of suggestions
-        self.assertEqual(translation.have_suggestion, 0)
+        self.assertEqual(translation.stats.suggestions, 0)
 
         # Unit should be translated
         self.assertEqual(len(unit.checks()), 0)

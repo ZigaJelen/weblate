@@ -15,10 +15,11 @@ Administrators guide
     translating
     checks
     machine
+    addons
+    memory
     config
     sample
     management
     whiteboard
-    advertisement
     componentlists
     optionals

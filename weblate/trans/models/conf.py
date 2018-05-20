@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -18,6 +18,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
+from __future__ import unicode_literals
+
 import os.path
 
 from django.conf import settings
@@ -27,10 +29,10 @@ from appconf import AppConf
 
 class WeblateConf(AppConf):
     # Weblate installation root
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     # Data directory
-    DATA_DIR = os.path.join(settings.BASE_DIR, '..', 'data')
+    DATA_DIR = os.path.join(settings.BASE_DIR, 'data')
 
     # Machine translation API keys
 
@@ -66,8 +68,21 @@ class WeblateConf(AppConf):
     # tmserver URL
     MT_TMSERVER = None
 
+    # API key for DeepL API
+    MT_DEEPL_KEY = None
+
+    # SAP Translation Hub
+    MT_SAP_BASE_URL = None
+    MT_SAP_SANDBOX_APIKEY = None
+    MT_SAP_USERNAME = None
+    MT_SAP_PASSWORD = None
+    MT_SAP_USE_MT = True
+
     # Limit (in seconds) for Weblate machine translation
     MT_WEBLATE_LIMIT = 15
+
+    # Akismet API key
+    AKISMET_API_KEY = None
 
     # Title of site to use
     SITE_TITLE = 'Weblate'
@@ -94,16 +109,10 @@ class WeblateConf(AppConf):
     SIMILAR_MESSAGES = 5
 
     # Enable lazy commits
-    LAZY_COMMITS = True
     COMMIT_PENDING_HOURS = 24
 
     # Offload indexing
     OFFLOAD_INDEXING = False
-
-    # Translation locking
-    AUTO_LOCK = True
-    AUTO_LOCK_TIME = 60
-    LOCK_TIME = 15 * 60
 
     # List of quality checks
     CHECK_LIST = (
@@ -150,8 +159,8 @@ class WeblateConf(AppConf):
 
     # List of machine translations
     MACHINE_TRANSLATION_SERVICES = (
-        'weblate.trans.machine.weblatetm.WeblateSimilarTranslation',
         'weblate.trans.machine.weblatetm.WeblateTranslation',
+        'weblate.memory.machine.WeblateMemory',
     )
 
     # Whether machine translations are enabled
@@ -165,7 +174,7 @@ class WeblateConf(AppConf):
     POST_ADD_SCRIPTS = ()
 
     # Font for charts and widgets
-    TTF_PATH = os.path.join(settings.BASE_DIR, 'ttf')
+    TTF_PATH = os.path.join(settings.BASE_DIR, 'weblate', 'ttf')
 
     # Anonymous user name
     ANONYMOUS_USER_NAME = 'anonymous'
@@ -179,15 +188,15 @@ class WeblateConf(AppConf):
     # Captcha for registrations
     REGISTRATION_CAPTCHA = True
 
-    # Piwik
+    # Matomo
     PIWIK_SITE_ID = None
     PIWIK_URL = None
 
     # Google Analytics
     GOOGLE_ANALYTICS_ID = None
 
-    # Self advertisement
-    SELF_ADVERTISEMENT = False
+    # URL with status monitoring
+    STATUS_URL = None
 
     # Use simple language codes for default language/country combinations
     SIMPLIFY_LANGUAGES = True
@@ -217,6 +226,9 @@ class WeblateConf(AppConf):
 
     DEFAULT_TRANSLATION_PROPAGATION = True
 
+    DEFAULT_PUSH_ON_COMMIT = True
+    DEFAULT_VCS = 'git'
+
     # Billing
     INVOICE_PATH = ''
 
@@ -230,6 +242,13 @@ class WeblateConf(AppConf):
     AUTH_TOKEN_VALID = 3600
     AUTH_LOCK_ATTEMPTS = 10
     AUTH_PASSWORD_DAYS = 180
+
+    # Mail customization
+    ADMINS_CONTACT = []
+    ADMINS_HOSTING = []
+
+    # Special chars for visual keyboard
+    SPECIAL_CHARS = ('\t', '\n', '…')
 
     class Meta(object):
         prefix = ''

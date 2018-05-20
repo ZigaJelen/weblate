@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -67,7 +67,7 @@ class MyMemoryTranslation(MachineTranslation):
 
         return (
             match['translation'],
-            quality * match['match'],
+            int(quality * match['match']),
             source,
             match['segment'],
         )

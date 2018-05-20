@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -25,11 +25,17 @@ import random
 
 from django.test import TestCase
 
+from weblate.lang.models import Plural, Language
 
-class MockLanguage(object):
+
+class MockLanguage(Language):
     """Mock language object."""
+    class Meta(object):
+        proxy = True
+
     def __init__(self, code='cs'):
-        self.code = code
+        super(MockLanguage, self).__init__(code=code)
+        self.plural = Plural(language=self)
 
 
 class MockProject(object):
@@ -51,10 +57,7 @@ class MockTranslation(object):
     def __init__(self, code='cs'):
         self.language = MockLanguage(code)
         self.subproject = MockSubProject()
-        self.template = False
-
-    def is_template(self):
-        return self.template
+        self.is_template = False
 
 
 class MockUnit(object):

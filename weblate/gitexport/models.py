@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -18,12 +18,12 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.dispatch import receiver
 from django.db.models.signals import post_save, pre_save
 
 from weblate.trans.models import SubProject, Project
-from weblate.trans.site import get_site_url
+from weblate.utils.site import get_site_url
 from weblate.utils.decorators import disable_for_loaddata
 
 
@@ -58,4 +58,4 @@ def save_project(sender, instance, **kwargs):
             new_url = get_export_url(component)
             if component.git_export != new_url:
                 component.git_export = new_url
-                component.save()
+                component.save(update_fields=['git_export'])

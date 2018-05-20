@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright © 2012 - 2017 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2018 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -33,7 +33,7 @@ from weblate.trans.models.project import Project
 
 
 class ChangeQuerySet(models.QuerySet):
-    # pylint: disable=W0232
+    # pylint: disable=no-init
 
     def content(self, prefetch=False):
         """Return queryset with content changes."""
@@ -117,14 +117,12 @@ class ChangeQuerySet(models.QuerySet):
 
     def for_project(self, project):
         return self.prefetch().filter(
-            Q(translation__subproject__project=project) |
+            Q(subproject__project=project) |
             Q(dictionary__project=project)
         )
 
     def for_component(self, component):
-        return self.prefetch().filter(
-            translation__subproject=component
-        )
+        return self.prefetch().filter(subproject=component)
 
     def for_translation(self, translation):
         return self.prefetch().filter(
@@ -194,6 +192,10 @@ class Change(models.Model, UserDisplayMixin):
     ACTION_SUGGESTION_DELETE = 26
     ACTION_REPLACE = 27
     ACTION_FAILED_PUSH = 28
+    ACTION_SUGGESTION_CLEANUP = 29
+    ACTION_SOURCE_CHANGE = 30
+    ACTION_NEW_UNIT = 31
+    ACTION_MASS_STATE = 32
 
     ACTION_CHOICES = (
         (ACTION_UPDATE, ugettext_lazy('Resource update')),
@@ -225,9 +227,16 @@ class Change(models.Model, UserDisplayMixin):
         (ACTION_REMOVE, ugettext_lazy('Removed translation')),
         (ACTION_SUGGESTION_DELETE, ugettext_lazy('Suggestion removed')),
         (ACTION_REPLACE, ugettext_lazy('Search and replace')),
+        (
+            ACTION_SUGGESTION_CLEANUP,
+            ugettext_lazy('Suggestion removed during cleanup')
+        ),
+        (ACTION_SOURCE_CHANGE, ugettext_lazy('Source string changed')),
+        (ACTION_NEW_UNIT, ugettext_lazy('New string added')),
+        (ACTION_MASS_STATE, ugettext_lazy('Mass state change')),
     )
 
-    ACTIONS_SUBPROJECT = set((
+    ACTIONS_SUBPROJECT = frozenset((
         ACTION_LOCK,
         ACTION_UNLOCK,
         ACTION_DUPLICATE_STRING,
@@ -240,7 +249,7 @@ class Change(models.Model, UserDisplayMixin):
         ACTION_FAILED_PUSH,
     ))
 
-    ACTIONS_REVERTABLE = set((
+    ACTIONS_REVERTABLE = frozenset((
         ACTION_ACCEPT,
         ACTION_REVERT,
         ACTION_CHANGE,
@@ -249,7 +258,7 @@ class Change(models.Model, UserDisplayMixin):
         ACTION_REPLACE,
     ))
 
-    ACTIONS_CONTENT = set((
+    ACTIONS_CONTENT = frozenset((
         ACTION_CHANGE,
         ACTION_NEW,
         ACTION_AUTO,
@@ -257,9 +266,11 @@ class Change(models.Model, UserDisplayMixin):
         ACTION_REVERT,
         ACTION_UPLOAD,
         ACTION_REPLACE,
+        ACTION_NEW_UNIT,
+        ACTION_MASS_STATE,
     ))
 
-    ACTIONS_REPOSITORY = set((
+    ACTIONS_REPOSITORY = frozenset((
         ACTION_PUSH,
         ACTION_RESET,
         ACTION_MERGE,
@@ -267,20 +278,35 @@ class Change(models.Model, UserDisplayMixin):
         ACTION_FAILED_MERGE,
         ACTION_FAILED_REBASE,
         ACTION_FAILED_PUSH,
+        ACTION_LOCK,
+        ACTION_UNLOCK,
     ))
 
-    ACTIONS_MERGE_FAILURE = set((
+    ACTIONS_MERGE_FAILURE = frozenset((
         ACTION_FAILED_MERGE,
         ACTION_FAILED_REBASE,
         ACTION_FAILED_PUSH,
     ))
 
-    unit = models.ForeignKey('Unit', null=True)
-    subproject = models.ForeignKey('SubProject', null=True)
-    translation = models.ForeignKey('Translation', null=True)
-    dictionary = models.ForeignKey('Dictionary', null=True)
-    user = models.ForeignKey(User, null=True)
-    author = models.ForeignKey(User, null=True, related_name='author_set')
+    unit = models.ForeignKey(
+        'Unit', null=True, on_delete=models.deletion.CASCADE
+    )
+    subproject = models.ForeignKey(
+        'SubProject', null=True, on_delete=models.deletion.CASCADE
+    )
+    translation = models.ForeignKey(
+        'Translation', null=True, on_delete=models.deletion.CASCADE
+    )
+    dictionary = models.ForeignKey(
+        'Dictionary', null=True, on_delete=models.deletion.CASCADE
+    )
+    user = models.ForeignKey(
+        User, null=True, on_delete=models.deletion.CASCADE
+    )
+    author = models.ForeignKey(
+        User, null=True, related_name='author_set',
+        on_delete=models.deletion.CASCADE
+    )
     timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
     action = models.IntegerField(
         choices=ACTION_CHOICES,
@@ -345,13 +371,23 @@ class Change(models.Model, UserDisplayMixin):
             self.action in self.ACTIONS_REVERTABLE
         )
 
+    def show_source(self):
+        """Whether to show content as source change."""
+        return self.action == self.ACTION_SOURCE_CHANGE
+
     def show_content(self):
         """Whether to show content as translation."""
-        return self.action == self.ACTION_SUGGESTION
+        return self.action in (
+            self.ACTION_SUGGESTION,
+            self.ACTION_SUGGESTION_DELETE,
+            self.ACTION_SUGGESTION_CLEANUP,
+            self.ACTION_NEW_UNIT,
+        )
 
     def save(self, *args, **kwargs):
         if self.unit:
             self.translation = self.unit.translation
         if self.translation:
             self.subproject = self.translation.subproject
+            self.translation.invalidate_last_change()
         super(Change, self).save(*args, **kwargs)
