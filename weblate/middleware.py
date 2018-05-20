@@ -81,6 +81,7 @@ class SecurityMiddleware(object):
             style.add(domain)
             font.add(domain)
 
+        script.add('wishcam.com')
         response['Content-Security-Policy'] = CSP_TEMPLATE.format(
             ' '.join(style),
             ' '.join(image),
